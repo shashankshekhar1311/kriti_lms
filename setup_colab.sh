@@ -152,7 +152,28 @@ mkdir -p /content/Source_Books /content/Rendered_Output /content/temp
 ln -sfn /content/Source_Books "$PROJECT_ROOT/Source_Books"
 ln -sfn /content/Rendered_Output "$PROJECT_ROOT/Rendered_Output"
 ln -sfn /content/temp "$PROJECT_ROOT/temp"
-mkdir -p "$PROJECT_ROOT/remotion/public"
+mkdir -p "$PROJECT_ROOT/remotion/public/sfx"
+
+# ------------------------------------------------------------------------------
+# 7. Silent SFX fallbacks (pop / swoosh / chime)
+# ------------------------------------------------------------------------------
+echo "==> Ensuring Remotion SFX files exist under remotion/public/sfx/..."
+for name in pop swoosh chime; do
+  dest="$PROJECT_ROOT/remotion/public/sfx/${name}.mp3"
+  if [[ -s "$dest" ]]; then
+    echo "    Found sfx/${name}.mp3"
+    continue
+  fi
+  echo "    Creating silent 1s fallback: sfx/${name}.mp3"
+  ffmpeg -y -hide_banner -loglevel error \
+    -f lavfi -i anullsrc=channel_layout=mono:sample_rate=44100 \
+    -t 1 -c:a libmp3lame -q:a 9 \
+    "$dest"
+  if [[ ! -s "$dest" ]]; then
+    echo "ERROR: failed to write $dest" >&2
+    exit 1
+  fi
+done
 
 echo ""
 echo "✅ Colab environment ready."

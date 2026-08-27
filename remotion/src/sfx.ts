@@ -1,4 +1,4 @@
-import {staticFile} from 'remotion';
+import {getStaticFiles, staticFile} from 'remotion';
 
 /** Relative paths under remotion/public/sfx/ */
 export const SFX_FILES = {
@@ -9,15 +9,29 @@ export const SFX_FILES = {
 
 export type SfxId = keyof typeof SFX_FILES;
 
+const sfxExistsInPublic = (relativePath: string): boolean => {
+  try {
+    const normalized = relativePath.replace(/^public\//, '').replace(/^\/+/, '');
+    return getStaticFiles().some((file) => {
+      const name = file.name.replace(/\\/g, '/');
+      return name === normalized || name.endsWith(`/${normalized}`);
+    });
+  } catch {
+    return false;
+  }
+};
+
 /**
  * Resolve a public SFX asset for Remotion <Audio />.
- * Keep narration / mascot video at volume 1.0; duck SFX to ~28%.
+ * Returns null when the file is missing so render can skip it.
  */
-export const SFX = {
-  pop: staticFile(SFX_FILES.pop),
-  swoosh: staticFile(SFX_FILES.swoosh),
-  chime: staticFile(SFX_FILES.chime),
-} as const;
+export const resolveSfxSrc = (id: SfxId): string | null => {
+  const relative = SFX_FILES[id];
+  if (!sfxExistsInPublic(relative)) {
+    return null;
+  }
+  return staticFile(relative);
+};
 
 /** Narration (mascot / VO) stays full level. */
 export const NARRATION_VOLUME = 1;

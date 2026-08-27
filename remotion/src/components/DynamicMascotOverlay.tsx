@@ -1,12 +1,10 @@
 import {useState} from 'react';
 import {OffthreadVideo} from 'remotion';
-import type {MascotPosition} from '../schema';
 import {resolveMascotSrc} from '../media';
-import {mascotBox} from '../layout';
 
 const GyanuFallback: React.FC = () => (
   <svg viewBox="0 0 240 280" width="100%" height="100%" aria-hidden>
-    <ellipse cx="120" cy="262" rx="54" ry="10" fill="rgba(2,6,23,0.45)" />
+    <ellipse cx="120" cy="262" rx="54" ry="10" fill="rgba(2,6,23,0.35)" />
     <circle cx="120" cy="118" r="82" fill="#06B6D4" />
     <circle cx="120" cy="118" r="82" fill="none" stroke="#F59E0B" strokeWidth="7" />
     <circle cx="94" cy="104" r="17" fill="#F8FAFC" />
@@ -29,58 +27,61 @@ const GyanuFallback: React.FC = () => (
   </svg>
 );
 
+/**
+ * Mascot fills the fixed Mascot Zone. Transparent container + screen blend
+ * removes black MP4 letterbox so the stage background shows through.
+ */
 export const DynamicMascotOverlay: React.FC<{
   videoUrl: string;
-  pose: MascotPosition;
   /** Keep mascot / narration VO at full level (SFX are ducked separately). */
   narrationVolume?: number;
-}> = ({videoUrl, pose, narrationVolume = 1}) => {
+  /** Subtle idle bob (px), applied inside the zone only. */
+  bobY?: number;
+  scale?: number;
+}> = ({videoUrl, narrationVolume = 1, bobY = 0, scale = 1}) => {
   const [videoFailed, setVideoFailed] = useState(false);
   const src = resolveMascotSrc(videoUrl);
   const showVideo = Boolean(src) && !videoFailed;
-  const box = mascotBox(pose);
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: box.left,
-        top: box.top,
-        width: box.width,
-        height: box.height,
-        zIndex: 6,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        height: 440,
+        background: 'transparent',
+        zIndex: 1,
         pointerEvents: 'none',
+        transform: `translateY(${bobY}px) scale(${scale})`,
+        transformOrigin: 'center bottom',
       }}
     >
       <div
         style={{
           position: 'absolute',
-          left: '12%',
-          right: '12%',
-          bottom: -6,
-          height: 28,
-          borderRadius: '50%',
-          background: 'rgba(2, 6, 23, 0.45)',
-          filter: 'blur(6px)',
-        }}
-      />
-      <div
-        style={{
-          position: 'absolute',
           inset: 0,
-          overflow: 'hidden',
+          background: 'transparent',
+          overflow: 'visible',
+          display: 'flex',
+          alignItems: 'flex-end',
+          justifyContent: 'center',
         }}
       >
         {showVideo && src ? (
           <OffthreadVideo
             src={src}
             volume={narrationVolume}
+            transparent
             onError={() => setVideoFailed(true)}
             style={{
               width: '100%',
               height: '100%',
               objectFit: 'contain',
               objectPosition: 'center bottom',
+              background: 'transparent',
+              mixBlendMode: 'screen',
             }}
             acceptableTimeShiftInSeconds={0.3}
             pauseWhenBuffering
@@ -90,12 +91,12 @@ export const DynamicMascotOverlay: React.FC<{
         ) : (
           <div
             style={{
-              width: '100%',
+              width: '92%',
               height: '100%',
+              background: 'transparent',
               display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'flex-end',
+              alignItems: 'flex-end',
+              justifyContent: 'center',
             }}
           >
             <GyanuFallback />

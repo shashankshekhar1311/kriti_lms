@@ -4,11 +4,15 @@ import type {VisualEvent} from '../schema';
 import {COLORS, NEON, clampLines, ellipsis} from '../theme';
 import {bodyFont, displayFont} from '../fonts';
 import {useFadeSlide, popAt} from '../hooks/use-frame-motion';
-import {placeFloatingCard} from '../layout';
+import {CONTENT_ZONE, placeFloatingCard} from '../layout';
 import {IntroCard} from './cards/IntroCard';
 import {PlaceValueGrid} from './cards/PlaceValueGrid';
 import {WorkedExample} from './cards/WorkedExample';
 
+/**
+ * Math / concept cards render inside the Content Zone only.
+ * max-width: 100% + local coordinates guarantee x never drops below 540px.
+ */
 export const FloatingMathCard: React.FC<{
   event: VisualEvent;
   studentName: string;
@@ -39,16 +43,20 @@ export const FloatingMathCard: React.FC<{
         left: box.left,
         top: box.top,
         width: box.width,
+        maxWidth: '100%',
         height: box.height,
+        maxHeight: CONTENT_ZONE.height,
         zIndex: 5,
         opacity: appear,
         transform: `translateY(${(1 - appear) * 28}px) scale(${0.9 + appear * 0.1})`,
         pointerEvents: 'none',
+        boxSizing: 'border-box',
       }}
     >
       <div
         style={{
           width: '100%',
+          maxWidth: '100%',
           height: '100%',
           boxSizing: 'border-box',
           borderRadius: 28,
@@ -60,6 +68,7 @@ export const FloatingMathCard: React.FC<{
           display: 'flex',
           flexDirection: 'column',
           minHeight: 0,
+          minWidth: 0,
         }}
       >
         {event.type === 'intro' ? (
@@ -98,11 +107,15 @@ const SummaryContent: React.FC<{
     <div
       style={{
         height: '100%',
+        width: '100%',
+        maxWidth: '100%',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
         gap: 14,
         minHeight: 0,
+        minWidth: 0,
+        boxSizing: 'border-box',
       }}
     >
       <motion.div
@@ -155,6 +168,7 @@ const SummaryContent: React.FC<{
       <div
         style={{
           width: '100%',
+          maxWidth: '100%',
           display: 'flex',
           flexDirection: 'column',
           gap: 8,
@@ -167,6 +181,7 @@ const SummaryContent: React.FC<{
             key={`${String(item)}-${index}`}
             style={{
               minWidth: 0,
+              maxWidth: '100%',
               display: 'flex',
               alignItems: 'center',
               gap: 10,
@@ -174,6 +189,7 @@ const SummaryContent: React.FC<{
               borderRadius: 14,
               border: `2px solid ${COLORS.cyan}`,
               background: COLORS.cyanSoft,
+              boxSizing: 'border-box',
             }}
           >
             <span style={{flexShrink: 0}}>★</span>
