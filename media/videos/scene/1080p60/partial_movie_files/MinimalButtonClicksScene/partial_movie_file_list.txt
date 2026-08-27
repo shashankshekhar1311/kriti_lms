@@ -1,0 +1,9 @@
+# This file is used internally by FFMPEG.
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/MinimalButtonClicksScene/3373382780_3258737534_223132457.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/MinimalButtonClicksScene/4234509111_170846798_914364320.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/MinimalButtonClicksScene/4234509111_3146364297_2361714331.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/MinimalButtonClicksScene/4234509111_2645707024_224886588.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/MinimalButtonClicksScene/4234509111_629529955_3559844892.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/MinimalButtonClicksScene/4234509111_3873173991_1814045831.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/MinimalButtonClicksScene/4234509111_1135711572_621117013.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/MinimalButtonClicksScene/4234509111_4039060768_1861836542.mp4'

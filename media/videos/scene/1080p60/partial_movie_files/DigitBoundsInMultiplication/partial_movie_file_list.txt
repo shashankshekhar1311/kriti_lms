@@ -1,0 +1,9 @@
+# This file is used internally by FFMPEG.
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/DigitBoundsInMultiplication/3373382780_2123237736_223132457.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/DigitBoundsInMultiplication/4234509111_499328632_3627751968.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/DigitBoundsInMultiplication/4234509111_1662970201_2203457005.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/DigitBoundsInMultiplication/4234509111_3873173991_4052074839.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/DigitBoundsInMultiplication/4234509111_2182174113_3061667610.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/DigitBoundsInMultiplication/4234509111_3873173991_866308187.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/DigitBoundsInMultiplication/4234509111_1148413294_3192458398.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/DigitBoundsInMultiplication/4234509111_3873173991_2251657443.mp4'

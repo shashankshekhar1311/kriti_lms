@@ -1,0 +1,18 @@
+services:
+  drona-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kriti-drona-engine:latest
+    container_name: kriti-drona-engine
+    shm_size: "2gb"
+    env_file:
+      - .env
+    environment:
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
+      CHROME_PATH: /usr/bin/chromium
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./Source_Books:/app/Source_Books
+      - ./Rendered_Output:/app/Rendered_Output
+    restart: "no"

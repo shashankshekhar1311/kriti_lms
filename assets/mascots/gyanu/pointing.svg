@@ -1,0 +1,117 @@
+<svg viewBox="0 0 480 480" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bodyGrad" cx="50%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#F3B655"/>
+      <stop offset="100%" stop-color="#D97706"/>
+    </radialGradient>
+    <radialGradient id="faceGrad" cx="50%" cy="40%" r="65%">
+      <stop offset="0%" stop-color="#FFFCF2"/>
+      <stop offset="100%" stop-color="#FEF3C7"/>
+    </radialGradient>
+    <linearGradient id="wingGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#C2670A"/>
+      <stop offset="100%" stop-color="#B45F09"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ===== Feet ===== -->
+  <g>
+    <ellipse cx="203" cy="440" rx="22" ry="10" fill="#F59E0B"/>
+    <ellipse cx="277" cy="440" rx="22" ry="10" fill="#F59E0B"/>
+    <path d="M188 440 q-6 8 -12 6 M203 442 q0 9 -1 9 M218 440 q6 8 12 6" stroke="#B45309" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <path d="M262 440 q-6 8 -12 6 M277 442 q0 9 -1 9 M292 440 q6 8 12 6" stroke="#B45309" stroke-width="3" fill="none" stroke-linecap="round"/>
+  </g>
+
+  <!-- ===== Body ===== -->
+  <ellipse cx="240" cy="330" rx="118" ry="112" fill="url(#bodyGrad)" stroke="#B45309" stroke-width="4"/>
+
+  <!-- Belly patch -->
+  <ellipse cx="240" cy="352" rx="72" ry="80" fill="#FEF3C7"/>
+  <path d="M210 300 q30 14 60 0" stroke="#FDE9A8" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.8"/>
+  <path d="M205 330 q35 16 70 0" stroke="#FDE9A8" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.8"/>
+  <path d="M205 362 q35 16 70 0" stroke="#FDE9A8" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.8"/>
+  <path d="M212 392 q28 13 56 0" stroke="#FDE9A8" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.8"/>
+
+  <!-- ===== Left wing (owl's right, viewer's left) resting at side ===== -->
+  <path d="M132 268 C104 300 98 360 118 410 C132 428 152 424 158 404 C168 366 162 316 168 280 C160 262 142 254 132 268 Z" fill="url(#wingGrad)" stroke="#8A4708" stroke-width="3"/>
+  <path d="M128 320 q14 4 20 20 M124 355 q16 4 22 24" stroke="#8A4708" stroke-width="2.5" fill="none" stroke-linecap="round" opacity="0.7"/>
+
+  <!-- ===== Scholar collar ===== -->
+  <path d="M178 258 Q240 300 302 258 L302 278 Q240 322 178 278 Z" fill="#06B6D4" stroke="#0891B2" stroke-width="3"/>
+  <circle cx="240" cy="295" r="7" fill="#FEF3C7" stroke="#0891B2" stroke-width="2"/>
+
+  <!-- ===== Head group: slight rightward tilt ===== -->
+  <g transform="rotate(8 240 190)">
+    <!-- outer face ruff -->
+    <path d="M240 88
+             C 170 88 132 150 140 210
+             C 146 252 170 268 190 276
+             C 208 282 226 250 240 250
+             C 254 250 272 282 290 276
+             C 310 268 334 252 340 210
+             C 348 150 310 88 240 88 Z"
+          fill="url(#bodyGrad)" stroke="#B45309" stroke-width="4"/>
+
+    <!-- inner cream heart face -->
+    <path d="M240 108
+             C 188 108 158 156 164 202
+             C 168 236 188 248 203 253
+             C 218 258 230 232 240 232
+             C 250 232 262 258 277 253
+             C 292 248 312 236 316 202
+             C 322 156 292 108 240 108 Z"
+          fill="url(#faceGrad)"/>
+
+    <!-- ===== Eyes (confident, slightly narrowed/focused) ===== -->
+    <circle cx="204" cy="188" r="40" fill="#FFFFFF" stroke="#F3D9A0" stroke-width="2"/>
+    <circle cx="276" cy="188" r="40" fill="#FFFFFF" stroke="#F3D9A0" stroke-width="2"/>
+    <circle cx="208" cy="190" r="24" fill="#7C4A1E"/>
+    <circle cx="280" cy="190" r="24" fill="#7C4A1E"/>
+    <circle cx="208" cy="190" r="12" fill="#2B1808"/>
+    <circle cx="280" cy="190" r="12" fill="#2B1808"/>
+    <circle cx="202" cy="181" r="5.5" fill="#FFFFFF"/>
+    <circle cx="274" cy="181" r="5.5" fill="#FFFFFF"/>
+    <!-- confident lowered upper eyelid -->
+    <path d="M166 172 Q204 158 242 172" stroke="#F59E0B" stroke-width="0" fill="#FEF3C7" opacity="0"/>
+    <path d="M166 170 Q204 160 242 170 L242 176 Q204 166 166 176 Z" fill="url(#faceGrad)"/>
+    <path d="M238 170 Q276 160 314 170 L314 176 Q276 166 238 176 Z" fill="url(#faceGrad)"/>
+
+    <!-- ===== Round golden spectacles ===== -->
+    <g fill="none" stroke="#F59E0B" stroke-width="6">
+      <circle cx="204" cy="188" r="46"/>
+      <circle cx="276" cy="188" r="46"/>
+    </g>
+    <path d="M250 186 Q240 178 230 186" stroke="#F59E0B" stroke-width="6" fill="none" stroke-linecap="round"/>
+    <path d="M158 186 Q144 182 136 190" stroke="#F59E0B" stroke-width="6" fill="none" stroke-linecap="round"/>
+    <path d="M322 186 Q336 182 344 190" stroke="#F59E0B" stroke-width="6" fill="none" stroke-linecap="round"/>
+    <circle cx="204" cy="188" r="46" fill="#FFFFFF" opacity="0.04"/>
+    <circle cx="276" cy="188" r="46" fill="#FFFFFF" opacity="0.04"/>
+
+    <!-- ===== Confident angled eyebrows ===== -->
+    <path d="M170 146 Q192 136 216 148" stroke="#B45309" stroke-width="5" fill="none" stroke-linecap="round"/>
+    <path d="M308 146 Q286 134 258 144" stroke="#B45309" stroke-width="5" fill="none" stroke-linecap="round"/>
+
+    <!-- ===== Beak (closed, confident smile-beak) ===== -->
+    <path d="M228 220 Q240 246 252 220 Q240 232 228 220 Z" fill="#F59E0B" stroke="#B45309" stroke-width="2.5"/>
+
+    <!-- ===== Confident smile ===== -->
+    <path d="M212 248 Q240 266 268 246" stroke="#B45309" stroke-width="4" fill="none" stroke-linecap="round"/>
+
+    <!-- ===== Cheek blush ===== -->
+    <ellipse cx="180" cy="222" rx="12" ry="8" fill="#FDBA74" opacity="0.5"/>
+    <ellipse cx="300" cy="222" rx="12" ry="8" fill="#FDBA74" opacity="0.5"/>
+  </g>
+
+  <!-- ===== Right wing extended straight out, pointing to the side ===== -->
+  <path d="M352 300
+           C 400 296 448 292 470 296
+           C 480 298 480 308 470 312
+           C 448 320 410 320 380 322
+           C 362 323 350 316 348 306
+           C 347 302 349 300 352 300 Z"
+        fill="url(#wingGrad)" stroke="#8A4708" stroke-width="3"/>
+  <!-- pointing tip / feather fan -->
+  <path d="M460 296 L478 292 M462 304 L482 304 M460 312 L478 316" stroke="#8A4708" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <!-- connect wing to body smoothly -->
+  <path d="M330 270 C 352 278 362 292 356 308 C 352 320 336 326 322 320 C 312 312 312 288 330 270 Z" fill="url(#wingGrad)" stroke="#8A4708" stroke-width="3"/>
+</svg>

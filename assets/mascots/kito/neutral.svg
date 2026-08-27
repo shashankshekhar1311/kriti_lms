@@ -1,0 +1,106 @@
+<svg viewBox="0 0 400 480" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="kitoBody" cx="50%" cy="32%" r="75%">
+      <stop offset="0%" stop-color="#F472B6"/>
+      <stop offset="55%" stop-color="#EC4899"/>
+      <stop offset="100%" stop-color="#8B5CF6"/>
+    </radialGradient>
+    <radialGradient id="kitoGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#06B6D4" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#06B6D4" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="antennaGrad" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#EC4899"/>
+    </linearGradient>
+    <radialGradient id="tipGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#E0FBFF"/>
+      <stop offset="45%" stop-color="#67E8F9"/>
+      <stop offset="100%" stop-color="#06B6D4"/>
+    </radialGradient>
+  </defs>
+
+  <!-- ===== Ambient floating glow beneath ===== -->
+  <ellipse cx="200" cy="410" rx="90" ry="18" fill="url(#kitoGlow)"/>
+
+  <!-- ===== Floating sparkle motes ===== -->
+  <circle cx="80" cy="180" r="4" fill="#67E8F9" opacity="0.8"/>
+  <circle cx="330" cy="150" r="3" fill="#67E8F9" opacity="0.7"/>
+  <circle cx="320" cy="300" r="3.5" fill="#F472B6" opacity="0.7"/>
+  <circle cx="70" cy="290" r="3" fill="#F472B6" opacity="0.6"/>
+
+  <!-- ===== Antennas (behind head, glowing tips) ===== -->
+  <g>
+    <path d="M160 90 C 150 60 140 40 128 24" stroke="url(#antennaGrad)" stroke-width="9" fill="none" stroke-linecap="round"/>
+    <circle cx="128" cy="24" r="14" fill="url(#tipGlow)"/>
+    <circle cx="128" cy="24" r="20" fill="#67E8F9" opacity="0.3"/>
+
+    <path d="M240 90 C 250 60 260 40 272 24" stroke="url(#antennaGrad)" stroke-width="9" fill="none" stroke-linecap="round"/>
+    <circle cx="272" cy="24" r="14" fill="url(#tipGlow)"/>
+    <circle cx="272" cy="24" r="20" fill="#67E8F9" opacity="0.3"/>
+  </g>
+
+  <!-- ===== Tiny floating paws (not attached, hovering at sides) ===== -->
+  <g>
+    <ellipse cx="108" cy="330" rx="20" ry="16" fill="url(#kitoBody)" stroke="#7C3AED" stroke-width="2.5"/>
+    <ellipse cx="292" cy="330" rx="20" ry="16" fill="url(#kitoBody)" stroke="#7C3AED" stroke-width="2.5"/>
+    <!-- tiny finger creases -->
+    <path d="M100 334 q8 4 16 0" stroke="#7C3AED" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.6"/>
+    <path d="M284 334 q8 4 16 0" stroke="#7C3AED" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.6"/>
+  </g>
+
+  <!-- ===== Teardrop-shaped head/body ===== -->
+  <path d="M200 96
+           C 130 96 88 168 88 236
+           C 88 316 136 372 200 372
+           C 264 372 312 316 312 236
+           C 312 168 270 96 200 96 Z"
+        fill="url(#kitoBody)" stroke="#7C3AED" stroke-width="4"/>
+
+  <!-- soft belly highlight -->
+  <ellipse cx="200" cy="300" rx="58" ry="46" fill="#FBCFE8" opacity="0.35"/>
+
+  <!-- top head sheen -->
+  <ellipse cx="168" cy="150" rx="34" ry="22" fill="#FFFFFF" opacity="0.25"/>
+
+  <!-- ===== Large anime-style glossy eyes ===== -->
+  <!-- eye whites -->
+  <ellipse cx="160" cy="232" rx="42" ry="48" fill="#FFFFFF"/>
+  <ellipse cx="240" cy="232" rx="42" ry="48" fill="#FFFFFF"/>
+
+  <!-- irises -->
+  <ellipse cx="163" cy="242" rx="30" ry="34" fill="#8B5CF6"/>
+  <ellipse cx="237" cy="242" rx="30" ry="34" fill="#8B5CF6"/>
+
+  <!-- inner iris ring -->
+  <ellipse cx="163" cy="242" rx="18" ry="22" fill="#EC4899"/>
+  <ellipse cx="237" cy="242" rx="18" ry="22" fill="#EC4899"/>
+
+  <!-- pupils -->
+  <ellipse cx="163" cy="246" rx="9" ry="11" fill="#2B0B3F"/>
+  <ellipse cx="237" cy="246" rx="9" ry="11" fill="#2B0B3F"/>
+
+  <!-- glossy highlights -->
+  <ellipse cx="148" cy="216" rx="12" ry="15" fill="#FFFFFF"/>
+  <ellipse cx="228" cy="216" rx="12" ry="15" fill="#FFFFFF"/>
+  <circle cx="172" cy="256" r="5" fill="#FFFFFF" opacity="0.85"/>
+  <circle cx="246" cy="256" r="5" fill="#FFFFFF" opacity="0.85"/>
+  <circle cx="152" cy="248" r="3" fill="#FFFFFF" opacity="0.6"/>
+  <circle cx="226" cy="248" r="3" fill="#FFFFFF" opacity="0.6"/>
+
+  <!-- eyelash / upper lid definition -->
+  <path d="M120 210 Q160 182 200 210" stroke="#7C3AED" stroke-width="0" fill="none"/>
+  <path d="M118 208 Q160 178 202 208" stroke="none"/>
+
+  <!-- ===== Soft welcoming smile ===== -->
+  <path d="M178 292 Q200 308 222 292" stroke="#7C3AED" stroke-width="5" fill="none" stroke-linecap="round"/>
+
+  <!-- ===== Cheek blush ===== -->
+  <ellipse cx="130" cy="278" rx="14" ry="9" fill="#F9A8D4" opacity="0.55"/>
+  <ellipse cx="270" cy="278" rx="14" ry="9" fill="#F9A8D4" opacity="0.55"/>
+
+  <!-- ===== Cyan energy accent marks on body ===== -->
+  <path d="M150 340 q10 10 0 20" stroke="#06B6D4" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.7"/>
+  <path d="M250 340 q-10 10 0 20" stroke="#06B6D4" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.7"/>
+  <circle cx="200" cy="352" r="5" fill="#06B6D4" opacity="0.8"/>
+</svg>

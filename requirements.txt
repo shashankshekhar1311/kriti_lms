@@ -1,0 +1,16 @@
+manim>=0.18.0
+edge-tts>=6.1.9
+google-genai>=0.1.1
+anthropic>=0.20.0
+openai>=1.0.0
+python-dotenv>=1.0.1
+pypdf>=4.0.0
+json-repair>=0.28.0
+pillow>=10.0.0
+moviepy>=1.0.3
+# GPU lip-sync (Colab / local CUDA). Torch CUDA wheels come from pytorch.org or Colab.
+# torch>=2.0.0
+# torchvision
+# librosa
+# opencv-python
+# numpy

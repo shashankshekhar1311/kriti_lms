@@ -1,0 +1,13 @@
+# This file is used internally by FFMPEG.
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/TermsInExpressionsScene/3373382780_3163929928_223132457.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/TermsInExpressionsScene/4234509111_499328632_2824697484.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/TermsInExpressionsScene/4234509111_3155407216_3438710635.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/TermsInExpressionsScene/4234509111_499328632_3400187839.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/TermsInExpressionsScene/4234509111_1883905936_3936876583.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/TermsInExpressionsScene/4234509111_3873173991_733337962.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/TermsInExpressionsScene/4234509111_1604244149_1956825675.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/TermsInExpressionsScene/4234509111_499328632_2988568233.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/TermsInExpressionsScene/4234509111_256074577_1284589022.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/TermsInExpressionsScene/4234509111_499328632_282344470.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/TermsInExpressionsScene/4234509111_1479547560_2441520622.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/TermsInExpressionsScene/4234509111_3873173991_3927317548.mp4'

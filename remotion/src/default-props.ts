@@ -1,0 +1,127 @@
+import type {ComicLessonProps} from './schema';
+
+export const defaultComicLessonProps: ComicLessonProps = {
+  lesson_title: 'Place Value: Building 3,456',
+  student_name: 'Rahul',
+  talking_mascot_video_url: 'mascot.mp4',
+  mascot_clips: [
+    {
+      video_url: 'mascot.mp4',
+      start_time: 0,
+      end_time: 5,
+      pose: 'talking',
+    },
+    {
+      video_url: 'mascot.mp4',
+      start_time: 5,
+      end_time: 16.5,
+      pose: 'neutral',
+    },
+    {
+      video_url: 'mascot.mp4',
+      start_time: 16.5,
+      end_time: 22.5,
+      pose: 'pointing',
+    },
+    {
+      video_url: 'mascot.mp4',
+      start_time: 22.5,
+      end_time: 27.5,
+      pose: 'happy',
+    },
+  ],
+  narration_timeline: [
+    {
+      text: 'Hey Rahul! Today we crack the secret of place value together.',
+      start_time: 0,
+      end_time: 5,
+    },
+    {
+      text: 'Every digit has a job. Let us park 3,456 on the place grid.',
+      start_time: 5,
+      end_time: 10.5,
+    },
+    {
+      text: '3 lives in thousands, so it is worth 3,000. 4 hundreds ride next door.',
+      start_time: 10.5,
+      end_time: 16.5,
+    },
+    {
+      text: '5 tens and 6 ones join the team. Add the values and you get 3,456!',
+      start_time: 16.5,
+      end_time: 22.5,
+    },
+    {
+      text: 'Awesome work, Rahul. Remember: the place tells you the value!',
+      start_time: 22.5,
+      end_time: 27.5,
+    },
+  ],
+  visual_events: [
+    {
+      type: 'intro',
+      start_time: 0,
+      end_time: 5,
+      title: 'What is Place Value?',
+      items: [
+        'Every digit has a place',
+        'Place tells the value',
+        'Let us decode 3,456',
+      ],
+      mascot_position: {x: 960, y: 440, scale: 1.05},
+      card_position: {x: 960, y: 260},
+      mascot_pose: 'talking',
+    },
+    {
+      type: 'concept_card',
+      start_time: 5,
+      end_time: 10.5,
+      title: '3,456 on the Place Grid',
+      items: [3, 4, 5, 6],
+      mascot_position: {x: 460, y: 740, scale: 0.98},
+      card_position: {x: 1160, y: 540},
+      mascot_pose: 'neutral',
+    },
+    {
+      type: 'concept_card',
+      start_time: 10.5,
+      end_time: 16.5,
+      title: 'Expanded Form',
+      items: ['3000', '400', '50', '6'],
+      mascot_position: {x: 460, y: 740, scale: 0.95},
+      card_position: {x: 1160, y: 540},
+      mascot_pose: 'neutral',
+    },
+    {
+      type: 'math_step',
+      start_time: 16.5,
+      end_time: 22.5,
+      title: 'Add the values',
+      items: [
+        '3 × 1000 = 3000',
+        '4 × 100 = 400',
+        '5 × 10 = 50',
+        '6 × 1 = 6',
+        '3000 + 400 + 50 + 6 = 3456',
+      ],
+      mascot_position: {x: 1460, y: 740, scale: 0.92},
+      card_position: {x: 760, y: 540},
+      mascot_pose: 'pointing',
+    },
+    {
+      type: 'summary_badge',
+      start_time: 22.5,
+      end_time: 27.5,
+      title: 'You nailed it!',
+      items: [
+        'Place = position',
+        'Value = digit × place',
+        '3,456 = 3000 + 400 + 50 + 6',
+      ],
+      mascot_position: {x: 960, y: 540, scale: 1.08},
+      card_position: {x: 960, y: 420},
+      glowing_badge: true,
+      mascot_pose: 'happy',
+    },
+  ],
+};

@@ -1,0 +1,11 @@
+# This file is used internally by FFMPEG.
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/LandOfTensOptimization/3373382780_857935678_223132457.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/LandOfTensOptimization/4234509111_499328632_3765296416.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/LandOfTensOptimization/4234509111_2642874385_996380427.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/LandOfTensOptimization/4234509111_499328632_756423967.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/LandOfTensOptimization/4234509111_3658125402_1142416853.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/LandOfTensOptimization/4234509111_3873173991_1995877251.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/LandOfTensOptimization/4234509111_3416387389_1737017998.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/LandOfTensOptimization/4234509111_3873173991_2737322034.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/LandOfTensOptimization/4234509111_4181175131_441597737.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/LandOfTensOptimization/4234509111_3873173991_1363102972.mp4'

@@ -1,0 +1,11 @@
+# This file is used internally by FFMPEG.
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/RemovingBracketsScene/3373382780_2329988342_223132457.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/RemovingBracketsScene/4234509111_499328632_754091216.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/RemovingBracketsScene/4234509111_1960961296_2427724997.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/RemovingBracketsScene/4234509111_499328632_18686654.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/RemovingBracketsScene/4234509111_2366036807_3839155732.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/RemovingBracketsScene/4234509111_3873173991_249269074.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/RemovingBracketsScene/4234509111_3991352615_2025835682.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/RemovingBracketsScene/4234509111_499328632_167407290.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/RemovingBracketsScene/4234509111_770980426_3026460634.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/RemovingBracketsScene/4234509111_3873173991_4214078163.mp4'

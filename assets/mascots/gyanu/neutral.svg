@@ -1,0 +1,113 @@
+<svg viewBox="0 0 400 480" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bodyGrad" cx="50%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#F3B655"/>
+      <stop offset="100%" stop-color="#D97706"/>
+    </radialGradient>
+    <radialGradient id="faceGrad" cx="50%" cy="40%" r="65%">
+      <stop offset="0%" stop-color="#FFFCF2"/>
+      <stop offset="100%" stop-color="#FEF3C7"/>
+    </radialGradient>
+    <linearGradient id="wingGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#C2670A"/>
+      <stop offset="100%" stop-color="#B45F09"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ===== Feet ===== -->
+  <g>
+    <ellipse cx="163" cy="440" rx="22" ry="10" fill="#F59E0B"/>
+    <ellipse cx="237" cy="440" rx="22" ry="10" fill="#F59E0B"/>
+    <!-- talons -->
+    <path d="M148 440 q-6 8 -12 6 M163 442 q0 9 -1 9 M178 440 q6 8 12 6" stroke="#B45309" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <path d="M222 440 q-6 8 -12 6 M237 442 q0 9 -1 9 M252 440 q6 8 12 6" stroke="#B45309" stroke-width="3" fill="none" stroke-linecap="round"/>
+  </g>
+
+  <!-- ===== Body ===== -->
+  <ellipse cx="200" cy="330" rx="118" ry="112" fill="url(#bodyGrad)" stroke="#B45309" stroke-width="4"/>
+
+  <!-- Belly patch -->
+  <ellipse cx="200" cy="352" rx="72" ry="80" fill="#FEF3C7"/>
+  <!-- soft belly feather lines -->
+  <path d="M170 300 q30 14 60 0" stroke="#FDE9A8" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.8"/>
+  <path d="M165 330 q35 16 70 0" stroke="#FDE9A8" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.8"/>
+  <path d="M165 362 q35 16 70 0" stroke="#FDE9A8" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.8"/>
+  <path d="M172 392 q28 13 56 0" stroke="#FDE9A8" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.8"/>
+
+  <!-- ===== Wings resting at sides ===== -->
+  <path d="M92 268 C64 300 58 360 78 410 C92 428 112 424 118 404 C128 366 122 316 128 280 C120 262 102 254 92 268 Z" fill="url(#wingGrad)" stroke="#8A4708" stroke-width="3"/>
+  <path d="M308 268 C336 300 342 360 322 410 C308 428 288 424 282 404 C272 366 278 316 272 280 C280 262 298 254 308 268 Z" fill="url(#wingGrad)" stroke="#8A4708" stroke-width="3"/>
+  <!-- wing feather details -->
+  <path d="M88 320 q14 4 20 20 M84 355 q16 4 22 24" stroke="#8A4708" stroke-width="2.5" fill="none" stroke-linecap="round" opacity="0.7"/>
+  <path d="M312 320 q-14 4 -20 20 M316 355 q-16 4 -22 24" stroke="#8A4708" stroke-width="2.5" fill="none" stroke-linecap="round" opacity="0.7"/>
+
+  <!-- ===== Scholar collar ===== -->
+  <path d="M138 258 Q200 300 262 258 L262 278 Q200 322 138 278 Z" fill="#06B6D4" stroke="#0891B2" stroke-width="3"/>
+  <circle cx="200" cy="295" r="7" fill="#FEF3C7" stroke="#0891B2" stroke-width="2"/>
+
+  <!-- ===== Head / Heart-shaped face disc ===== -->
+  <g>
+    <!-- outer face ruff -->
+    <path d="M200 88
+             C 130 88 92 150 100 210
+             C 106 252 130 268 150 276
+             C 168 282 186 250 200 250
+             C 214 250 232 282 250 276
+             C 270 268 294 252 300 210
+             C 308 150 270 88 200 88 Z"
+          fill="url(#bodyGrad)" stroke="#B45309" stroke-width="4"/>
+
+    <!-- inner cream heart face -->
+    <path d="M200 108
+             C 148 108 118 156 124 202
+             C 128 236 148 248 163 253
+             C 178 258 190 232 200 232
+             C 210 232 222 258 237 253
+             C 252 248 272 236 276 202
+             C 282 156 252 108 200 108 Z"
+          fill="url(#faceGrad)"/>
+  </g>
+
+  <!-- ===== Eyes ===== -->
+  <!-- eye whites -->
+  <circle cx="164" cy="188" r="40" fill="#FFFFFF" stroke="#F3D9A0" stroke-width="2"/>
+  <circle cx="236" cy="188" r="40" fill="#FFFFFF" stroke="#F3D9A0" stroke-width="2"/>
+  <!-- irises -->
+  <circle cx="164" cy="192" r="24" fill="#7C4A1E"/>
+  <circle cx="236" cy="192" r="24" fill="#7C4A1E"/>
+  <!-- pupils -->
+  <circle cx="164" cy="192" r="12" fill="#2B1808"/>
+  <circle cx="236" cy="192" r="12" fill="#2B1808"/>
+  <!-- eye shine -->
+  <circle cx="157" cy="182" r="6" fill="#FFFFFF"/>
+  <circle cx="229" cy="182" r="6" fill="#FFFFFF"/>
+  <circle cx="171" cy="200" r="3" fill="#FFFFFF" opacity="0.8"/>
+  <circle cx="243" cy="200" r="3" fill="#FFFFFF" opacity="0.8"/>
+
+  <!-- ===== Round golden spectacles ===== -->
+  <g fill="none" stroke="#F59E0B" stroke-width="6">
+    <circle cx="164" cy="188" r="46"/>
+    <circle cx="236" cy="188" r="46"/>
+  </g>
+  <path d="M210 186 Q200 178 190 186" stroke="#F59E0B" stroke-width="6" fill="none" stroke-linecap="round"/>
+  <!-- spectacle arms -->
+  <path d="M118 186 Q104 182 96 190" stroke="#F59E0B" stroke-width="6" fill="none" stroke-linecap="round"/>
+  <path d="M282 186 Q296 182 304 190" stroke="#F59E0B" stroke-width="6" fill="none" stroke-linecap="round"/>
+  <!-- lens shine highlight -->
+  <circle cx="164" cy="188" r="46" fill="#FFFFFF" opacity="0.04"/>
+  <circle cx="236" cy="188" r="46" fill="#FFFFFF" opacity="0.04"/>
+
+  <!-- ===== Eyebrow tufts (subtle, friendly) ===== -->
+  <path d="M132 148 Q150 136 176 146" stroke="#B45309" stroke-width="5" fill="none" stroke-linecap="round"/>
+  <path d="M268 148 Q250 136 224 146" stroke="#B45309" stroke-width="5" fill="none" stroke-linecap="round"/>
+
+  <!-- ===== Beak ===== -->
+  <path d="M188 220 Q200 246 212 220 Q200 232 188 220 Z" fill="#F59E0B" stroke="#B45309" stroke-width="2.5"/>
+
+  <!-- ===== Gentle smile ===== -->
+  <path d="M176 246 Q200 262 224 246" stroke="#B45309" stroke-width="4" fill="none" stroke-linecap="round"/>
+
+  <!-- ===== Cheek blush ===== -->
+  <ellipse cx="140" cy="222" rx="12" ry="8" fill="#FDBA74" opacity="0.5"/>
+  <ellipse cx="260" cy="222" rx="12" ry="8" fill="#FDBA74" opacity="0.5"/>
+</svg>

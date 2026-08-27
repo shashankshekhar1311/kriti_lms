@@ -1,0 +1,838 @@
+"""Local GPU lip-sync for talking mascots (Colab-friendly, $0 API cost).
+
+Primary engine (CUDA)
+    Wav2Lip (default) or LivePortrait on ``cuda:0`` via PyTorch.
+    Repos and checkpoints are auto-cloned / downloaded under ``models/``.
+
+Fallback (CPU / no GPU)
+    MoviePy (preferred) or FFmpeg: static mascot with a subtle sine-wave
+    scale bounce timed to the audio, exported as H.264 MP4.
+
+No Hedra / Replicate / paid SaaS keys are used.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.request
+from pathlib import Path
+from typing import Optional, Sequence
+from urllib.error import URLError
+
+# ------------------------------------------------------------------------------
+# Environment
+# ------------------------------------------------------------------------------
+BASE_DIR = Path(__file__).resolve().parent
+TEMP_DIR = BASE_DIR / "temp"
+TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+MODELS_DIR = Path(os.getenv("LIP_SYNC_MODELS_DIR", str(BASE_DIR / "models"))).resolve()
+WAV2LIP_DIR = Path(os.getenv("WAV2LIP_ROOT", str(MODELS_DIR / "Wav2Lip"))).resolve()
+LIVEPORTRAIT_DIR = Path(os.getenv("LIVEPORTRAIT_ROOT", str(MODELS_DIR / "LivePortrait"))).resolve()
+
+WAV2LIP_REPO = os.getenv("WAV2LIP_REPO", "https://github.com/Rudrabha/Wav2Lip.git")
+LIVEPORTRAIT_REPO = os.getenv(
+    "LIVEPORTRAIT_REPO", "https://github.com/KwaiVGI/LivePortrait.git"
+)
+
+# Public mirrors commonly used in Colab notebooks (no API key).
+WAV2LIP_CKPT_URLS = [
+    "https://github.com/justinjohn0306/Wav2Lip/releases/download/models/wav2lip_gan.pth",
+    "https://huggingface.co/numz/wav2lip_studio/resolve/main/Wav2lip/wav2lip_gan.pth",
+]
+S3FD_URLS = [
+    "https://www.adrianbulat.com/downloads/python-fan/s3fd-619a316812.pth",
+    "https://github.com/justinjohn0306/Wav2Lip/releases/download/models/s3fd.pth",
+]
+
+logger = logging.getLogger("lip_sync_service")
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] lip_sync: %(message)s"))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+FALLBACK_FPS = 25
+FALLBACK_SIZE = 720
+BOUNCE_HZ = 2.2
+BOUNCE_AMP = 0.04
+CANVAS_BG = (15, 23, 42)  # slate-900
+RASTER_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+POSE_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".svg")
+VALID_POSES = ("neutral", "talking", "pointing", "happy")
+POSE_FALLBACK_CHAIN = {
+    "neutral": ("neutral", "talking"),
+    "talking": ("talking", "neutral"),
+    "pointing": ("pointing", "talking", "neutral"),
+    "happy": ("happy", "talking", "neutral"),
+}
+MASCOT_ASSETS_DIR = BASE_DIR / "assets" / "mascots"
+GPU_INFERENCE_TIMEOUT_S = int(os.getenv("LIP_SYNC_GPU_TIMEOUT", "900"))
+PREFERRED_ENGINE = (os.getenv("LIP_SYNC_ENGINE") or "wav2lip").strip().lower()
+
+
+# ------------------------------------------------------------------------------
+# Public API
+# ------------------------------------------------------------------------------
+def resolve_mascot_dir(
+    mascot_name: Optional[str] = None,
+    hint: Optional[Path] = None,
+) -> Path:
+    """Locate ``assets/mascots/{mascot_name}/`` (or a caller-supplied folder)."""
+    candidates: list[Path] = []
+    if hint is not None:
+        hint_path = Path(hint)
+        candidates.append(hint_path if hint_path.is_dir() else hint_path.parent)
+    if mascot_name:
+        candidates.append(MASCOT_ASSETS_DIR / str(mascot_name).strip().lower())
+    candidates.append(MASCOT_ASSETS_DIR / "gyanu")
+    for folder in candidates:
+        if folder.is_dir():
+            return folder
+    raise FileNotFoundError(
+        f"Mascot pose directory not found. Looked in: {', '.join(str(c) for c in candidates)}"
+    )
+
+
+def resolve_pose_image(
+    mascot_image_path: Optional[Path] = None,
+    pose_type: str = "talking",
+    mascot_name: Optional[str] = None,
+) -> Path:
+    """Pick ``{pose}.png`` (or svg/jpg) from the mascot asset directory.
+
+    Search order per pose: ``.png``, ``.jpg``, ``.jpeg``, ``.webp``, ``.svg``.
+    Missing poses fall back (pointing/happy → talking → neutral).
+    """
+    pose = str(pose_type or "talking").strip().lower()
+    if pose not in VALID_POSES:
+        logger.warning("Unknown pose_type %r; using 'talking'", pose_type)
+        pose = "talking"
+
+    hint = Path(mascot_image_path) if mascot_image_path else None
+    if hint is not None and not mascot_name and hint.exists():
+        mascot_name = hint.name if hint.is_dir() else hint.parent.name
+
+    mascot_dir = resolve_mascot_dir(mascot_name=mascot_name, hint=hint)
+    chain: Sequence[str] = POSE_FALLBACK_CHAIN.get(pose, ("talking", "neutral"))
+    for name in chain:
+        for ext in POSE_IMAGE_EXTS:
+            candidate = mascot_dir / f"{name}{ext}"
+            if candidate.is_file():
+                if name != pose:
+                    logger.info("Pose '%s' missing in %s; using %s", pose, mascot_dir, candidate.name)
+                else:
+                    logger.info("Pose '%s' -> %s", pose, candidate)
+                return candidate
+
+    if hint is not None and hint.is_file():
+        logger.info("No pose file for '%s'; using provided image %s", pose, hint.name)
+        return hint
+
+    raise FileNotFoundError(
+        f"No pose image for '{pose}' in {mascot_dir} "
+        f"(expected one of {', '.join(f'{p}.png' for p in VALID_POSES)})"
+    )
+
+
+def generate_talking_mascot(
+    mascot_image_path: Path,
+    audio_mp3_path: Path,
+    output_mp4_path: Path,
+    pose_type: str = "talking",
+    mascot_name: Optional[str] = None,
+) -> Path:
+    """Build a talking-mascot MP4 from a pose still (PNG/SVG) and TTS audio.
+
+    ``pose_type`` selects ``neutral`` / ``talking`` / ``pointing`` / ``happy``
+    from ``assets/mascots/{mascot}/`` (or the directory of ``mascot_image_path``)
+    before GPU lip-sync. On CUDA, runs local Wav2Lip (or LivePortrait). Without
+    a GPU, falls back to a MoviePy/FFmpeg sine-wave bounce.
+    """
+    mascot_image_path = Path(mascot_image_path)
+    audio_mp3_path = Path(audio_mp3_path)
+    output_mp4_path = Path(output_mp4_path)
+
+    pose_image = resolve_pose_image(
+        mascot_image_path=mascot_image_path,
+        pose_type=pose_type,
+        mascot_name=mascot_name,
+    )
+    if not audio_mp3_path.is_file():
+        raise FileNotFoundError(f"TTS audio not found: {audio_mp3_path}")
+
+    output_mp4_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info("Lip-sync pose=%s image=%s", pose_type, pose_image.name)
+    raster_path = _ensure_raster_image(pose_image)
+
+    if _cuda_available():
+        engines = _gpu_engine_order()
+        for name in engines:
+            try:
+                logger.info("GPU engine: %s on cuda:0", name)
+                if name == "wav2lip":
+                    result = _generate_via_wav2lip(raster_path, audio_mp3_path, output_mp4_path)
+                elif name == "liveportrait":
+                    result = _generate_via_liveportrait(raster_path, audio_mp3_path, output_mp4_path)
+                else:
+                    continue
+                if _is_valid_mp4(result):
+                    logger.info("%s succeeded -> %s", name, result)
+                    return result
+                logger.warning("%s produced an invalid MP4; trying next engine", name)
+            except Exception as exc:
+                logger.warning("%s failed: %s", name, exc)
+        logger.warning("All GPU engines failed; falling back to CPU bounce")
+    else:
+        logger.info("CUDA unavailable (torch.cuda.is_available()=False); using CPU bounce")
+
+    return _generate_local_fallback(raster_path, audio_mp3_path, output_mp4_path)
+
+
+# ------------------------------------------------------------------------------
+# CUDA / device
+# ------------------------------------------------------------------------------
+def _cuda_available() -> bool:
+    try:
+        import torch
+    except ImportError:
+        logger.info("PyTorch not installed; GPU lip-sync disabled")
+        return False
+
+    ok = bool(torch.cuda.is_available())
+    if ok:
+        try:
+            name = torch.cuda.get_device_name(0)
+            logger.info("CUDA ready: device=cuda:0 name=%s", name)
+        except Exception:
+            logger.info("CUDA ready: device=cuda:0")
+    return ok
+
+
+def _gpu_engine_order() -> list[str]:
+    if PREFERRED_ENGINE == "liveportrait":
+        return ["liveportrait", "wav2lip"]
+    if PREFERRED_ENGINE == "wav2lip":
+        return ["wav2lip", "liveportrait"]
+    return ["wav2lip", "liveportrait"]
+
+
+# ------------------------------------------------------------------------------
+# Wav2Lip (primary GPU)
+# ------------------------------------------------------------------------------
+def _generate_via_wav2lip(image_path: Path, audio_path: Path, output_path: Path) -> Path:
+    root = _ensure_wav2lip_repo()
+    ckpt = _ensure_wav2lip_checkpoint(root)
+    _ensure_s3fd_weights(root)
+
+    work = Path(tempfile.mkdtemp(prefix="wav2lip_", dir=str(TEMP_DIR)))
+    try:
+        raw_out = work / "result_raw.mp4"
+        # Wav2Lip accepts a static face image when --fps is set.
+        cmd = [
+            sys.executable,
+            str(root / "inference.py"),
+            "--checkpoint_path", str(ckpt),
+            "--face", str(image_path.resolve()),
+            "--audio", str(audio_path.resolve()),
+            "--outfile", str(raw_out),
+            "--fps", str(FALLBACK_FPS),
+            "--pads", "0", "20", "0", "0",
+            "--resize_factor", "1",
+            "--wav2lip_batch_size", "64",
+            "--face_det_batch_size", "8",
+        ]
+        logger.info("Wav2Lip inference: %s", " ".join(cmd[:6]) + " ...")
+        env = os.environ.copy()
+        env["CUDA_VISIBLE_DEVICES"] = env.get("CUDA_VISIBLE_DEVICES", "0")
+        # Prefer CUDA device 0 inside the process.
+        env["PYTORCH_CUDA_ALLOC_CONF"] = env.get("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
+
+        proc = subprocess.run(
+            cmd,
+            cwd=str(root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=GPU_INFERENCE_TIMEOUT_S,
+        )
+        if proc.returncode != 0 or not raw_out.is_file():
+            tail = ((proc.stderr or "") + "\n" + (proc.stdout or ""))[-1200:]
+            raise RuntimeError(f"Wav2Lip inference failed (code={proc.returncode}):\n{tail}")
+
+        return _remux_h264(raw_out, audio_path, output_path)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _ensure_wav2lip_repo() -> Path:
+    inference = WAV2LIP_DIR / "inference.py"
+    if inference.is_file():
+        logger.info("Using Wav2Lip at %s", WAV2LIP_DIR)
+        return WAV2LIP_DIR
+
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    if WAV2LIP_DIR.exists():
+        shutil.rmtree(WAV2LIP_DIR, ignore_errors=True)
+
+    logger.info("Cloning Wav2Lip -> %s", WAV2LIP_DIR)
+    proc = subprocess.run(
+        ["git", "clone", "--depth", "1", WAV2LIP_REPO, str(WAV2LIP_DIR)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if proc.returncode != 0 or not inference.is_file():
+        raise RuntimeError(
+            f"Failed to clone Wav2Lip: {(proc.stderr or proc.stdout or '')[-500:]}"
+        )
+    return WAV2LIP_DIR
+
+
+def _ensure_wav2lip_checkpoint(root: Path) -> Path:
+    ckpt_dir = root / "checkpoints"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("wav2lip_gan.pth", "wav2lip.pth"):
+        candidate = ckpt_dir / name
+        if candidate.is_file() and candidate.stat().st_size > 1_000_000:
+            return candidate
+
+    dest = ckpt_dir / "wav2lip_gan.pth"
+    logger.info("Downloading Wav2Lip checkpoint -> %s", dest)
+    _download_first_ok(WAV2LIP_CKPT_URLS, dest, min_bytes=1_000_000)
+    return dest
+
+
+def _ensure_s3fd_weights(root: Path) -> Path:
+    dest = root / "face_detection" / "detection" / "sfd" / "s3fd.pth"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_file() and dest.stat().st_size > 1_000_000:
+        return dest
+    logger.info("Downloading S3FD face detector -> %s", dest)
+    _download_first_ok(S3FD_URLS, dest, min_bytes=1_000_000)
+    return dest
+
+
+# ------------------------------------------------------------------------------
+# LivePortrait (optional GPU)
+# ------------------------------------------------------------------------------
+def _generate_via_liveportrait(image_path: Path, audio_path: Path, output_path: Path) -> Path:
+    """Best-effort LivePortrait path for Colab installs.
+
+    Official LivePortrait is driving-video based. This adapter looks for a
+    Colab-friendly audio entrypoint (``inference_audio.py`` / ``app_audio.py``)
+    or an installed ``liveportrait`` CLI. If none exist, raises so Wav2Lip /
+    bounce can take over.
+    """
+    root = _ensure_liveportrait_repo()
+    work = Path(tempfile.mkdtemp(prefix="liveportrait_", dir=str(TEMP_DIR)))
+    try:
+        raw_out = work / "result_raw.mp4"
+        script = _find_liveportrait_audio_script(root)
+        if script is None:
+            raise RuntimeError(
+                "LivePortrait audio entrypoint not found. "
+                "Install a fork with inference_audio.py, or set LIP_SYNC_ENGINE=wav2lip."
+            )
+
+        cmd = [
+            sys.executable,
+            str(script),
+            "--source", str(image_path.resolve()),
+            "--audio", str(audio_path.resolve()),
+            "--output", str(raw_out),
+            "--device", "cuda:0",
+        ]
+        # Alternate flag names used by some forks.
+        alt_cmds = [
+            cmd,
+            [
+                sys.executable, str(script),
+                "--source_image", str(image_path.resolve()),
+                "--driving_audio", str(audio_path.resolve()),
+                "--output", str(raw_out),
+                "--device_id", "0",
+            ],
+        ]
+
+        last_err = ""
+        for attempt in alt_cmds:
+            logger.info("LivePortrait inference: %s", " ".join(attempt[:5]) + " ...")
+            env = os.environ.copy()
+            env["CUDA_VISIBLE_DEVICES"] = env.get("CUDA_VISIBLE_DEVICES", "0")
+            proc = subprocess.run(
+                attempt,
+                cwd=str(root),
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=GPU_INFERENCE_TIMEOUT_S,
+            )
+            if proc.returncode == 0 and raw_out.is_file():
+                return _remux_h264(raw_out, audio_path, output_path)
+            last_err = ((proc.stderr or "") + "\n" + (proc.stdout or ""))[-1000:]
+
+        raise RuntimeError(f"LivePortrait inference failed:\n{last_err}")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _ensure_liveportrait_repo() -> Path:
+    markers = [
+        LIVEPORTRAIT_DIR / "inference.py",
+        LIVEPORTRAIT_DIR / "src" / "live_portrait_pipeline.py",
+        LIVEPORTRAIT_DIR / "readme.md",
+        LIVEPORTRAIT_DIR / "README.md",
+    ]
+    if any(p.is_file() for p in markers):
+        logger.info("Using LivePortrait at %s", LIVEPORTRAIT_DIR)
+        return LIVEPORTRAIT_DIR
+
+    # Do not auto-clone the full LivePortrait stack by default (large weights).
+    # Only clone when explicitly requested.
+    if os.getenv("LIP_SYNC_AUTO_CLONE_LIVEPORTRAIT", "").strip() not in {"1", "true", "yes"}:
+        raise RuntimeError(
+            f"LivePortrait not found at {LIVEPORTRAIT_DIR}. "
+            "Clone it manually or set LIP_SYNC_AUTO_CLONE_LIVEPORTRAIT=1."
+        )
+
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    if LIVEPORTRAIT_DIR.exists():
+        shutil.rmtree(LIVEPORTRAIT_DIR, ignore_errors=True)
+    logger.info("Cloning LivePortrait -> %s", LIVEPORTRAIT_DIR)
+    proc = subprocess.run(
+        ["git", "clone", "--depth", "1", LIVEPORTRAIT_REPO, str(LIVEPORTRAIT_DIR)],
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"Failed to clone LivePortrait: {(proc.stderr or '')[-500:]}")
+    return LIVEPORTRAIT_DIR
+
+
+def _find_liveportrait_audio_script(root: Path) -> Optional[Path]:
+    candidates = [
+        root / "inference_audio.py",
+        root / "app_audio.py",
+        root / "scripts" / "inference_audio.py",
+        root / "src" / "inference_audio.py",
+    ]
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
+# ------------------------------------------------------------------------------
+# Local MoviePy / FFmpeg fallback (CPU)
+# ------------------------------------------------------------------------------
+def _generate_local_fallback(image_path: Path, audio_path: Path, output_path: Path) -> Path:
+    duration = _media_duration(audio_path)
+    if duration <= 0:
+        duration = 1.0
+    logger.info("CPU bounce fallback: duration=%.2fs image=%s", duration, image_path.name)
+
+    try:
+        _render_bounce_moviepy(image_path, audio_path, output_path, duration)
+        if _is_valid_mp4(output_path):
+            logger.info("MoviePy fallback wrote %s", output_path)
+            return output_path
+        logger.warning("MoviePy produced an invalid file; trying FFmpeg")
+    except Exception as exc:
+        logger.warning("MoviePy fallback unavailable (%s); trying FFmpeg", exc)
+
+    _render_bounce_ffmpeg(image_path, audio_path, output_path, duration)
+    if not _is_valid_mp4(output_path):
+        raise RuntimeError(f"Local fallback failed to write a valid MP4 at {output_path}")
+    logger.info("FFmpeg fallback wrote %s", output_path)
+    return output_path
+
+
+def _render_bounce_moviepy(image_path: Path, audio_path: Path, output_path: Path, duration: float) -> None:
+    try:
+        from moviepy import AudioFileClip, ColorClip, CompositeVideoClip, ImageClip
+
+        is_v2 = True
+    except ImportError:
+        from moviepy.editor import AudioFileClip, ColorClip, CompositeVideoClip, ImageClip
+
+        is_v2 = False
+
+    def with_duration(clip, seconds):
+        return clip.with_duration(seconds) if is_v2 else clip.set_duration(seconds)
+
+    def with_position(clip, pos):
+        return clip.with_position(pos) if is_v2 else clip.set_position(pos)
+
+    def with_audio(clip, audio):
+        return clip.with_audio(audio) if is_v2 else clip.set_audio(audio)
+
+    def resized(clip, **kwargs):
+        return clip.resized(**kwargs) if is_v2 else clip.resize(**kwargs)
+
+    audio_clip = AudioFileClip(str(audio_path))
+    bg = with_duration(ColorClip(size=(FALLBACK_SIZE, FALLBACK_SIZE), color=CANVAS_BG), duration)
+    mascot = ImageClip(str(image_path))
+    target_h = int(FALLBACK_SIZE * 0.82)
+    if getattr(mascot, "h", 0) and mascot.h > 0:
+        mascot = resized(mascot, height=target_h)
+
+    def zoom_at(t: float) -> float:
+        return 1.0 + BOUNCE_AMP * math.sin(2.0 * math.pi * BOUNCE_HZ * t)
+
+    if is_v2:
+        bouncing = mascot.resized(lambda t: zoom_at(t))
+    else:
+        bouncing = mascot.resize(lambda t: zoom_at(t))
+    bouncing = with_duration(with_position(bouncing, "center"), duration)
+    final = with_audio(CompositeVideoClip([bg, bouncing], size=(FALLBACK_SIZE, FALLBACK_SIZE)), audio_clip)
+    final = with_duration(final, duration)
+    try:
+        final.write_videofile(
+            str(output_path),
+            fps=FALLBACK_FPS,
+            codec="libx264",
+            audio_codec="aac",
+            preset="veryfast",
+            threads=2,
+            logger=None,
+        )
+    finally:
+        for clip in (final, bouncing, mascot, bg, audio_clip):
+            try:
+                clip.close()
+            except Exception:
+                pass
+
+
+def _render_bounce_ffmpeg(image_path: Path, audio_path: Path, output_path: Path, duration: float) -> None:
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("ffmpeg is not on PATH; cannot encode fallback MP4")
+
+    frames = max(int(math.ceil(duration * FALLBACK_FPS)), FALLBACK_FPS)
+    padded = FALLBACK_SIZE + 80
+    bg_hex = "0x{:02X}{:02X}{:02X}".format(*CANVAS_BG)
+    zoom_expr = f"1+{BOUNCE_AMP}*sin(2*PI*{BOUNCE_HZ}*on/{FALLBACK_FPS})"
+    vf = (
+        f"[0:v]scale={padded}:{padded}:force_original_aspect_ratio=decrease,"
+        f"pad={padded}:{padded}:(ow-iw)/2:(oh-ih)/2:color={bg_hex},"
+        f"zoompan=z='{zoom_expr}':d={frames}:"
+        f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+        f"s={FALLBACK_SIZE}x{FALLBACK_SIZE}:fps={FALLBACK_FPS},"
+        f"format=yuv420p[v]"
+    )
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(image_path),
+        "-i", str(audio_path),
+        "-filter_complex", vf,
+        "-map", "[v]",
+        "-map", "1:a",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-shortest",
+        "-movflags", "+faststart",
+        str(output_path),
+    ]
+    logger.info("FFmpeg fallback: %s", " ".join(cmd[:6]) + " ...")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=max(120, int(duration * 8)))
+    if result.returncode != 0:
+        tail = (result.stderr or "")[-800:]
+        raise RuntimeError(f"ffmpeg bounce render failed:\n{tail}")
+
+
+# ------------------------------------------------------------------------------
+# Image rasterization (SVG -> PNG)
+# ------------------------------------------------------------------------------
+def _ensure_raster_image(path: Path) -> Path:
+    suffix = path.suffix.lower()
+    if suffix in RASTER_EXTS:
+        return path
+    if suffix != ".svg":
+        logger.warning("Unusual mascot format %s - attempting to use as-is", suffix)
+        return path
+
+    png_path = TEMP_DIR / f"{path.stem}_raster_{os.getpid()}.png"
+    logger.info("Rasterizing SVG -> %s", png_path.name)
+
+    errors: list[str] = []
+    for converter in (_svg_via_cairosvg, _svg_via_browser, _svg_via_magick, _svg_via_ffmpeg):
+        try:
+            if converter(path, png_path) and png_path.is_file() and png_path.stat().st_size > 0:
+                return png_path
+        except Exception as exc:
+            errors.append(f"{converter.__name__}: {exc}")
+
+    raise RuntimeError(
+        "Could not rasterize SVG mascot. Tried: " + ("; ".join(errors) or "no converters")
+    )
+
+
+def _svg_via_cairosvg(svg_path: Path, png_path: Path) -> bool:
+    import cairosvg
+
+    cairosvg.svg2png(
+        url=str(svg_path),
+        write_to=str(png_path),
+        output_width=FALLBACK_SIZE,
+        output_height=FALLBACK_SIZE,
+        background_color="#0F172A",
+    )
+    return True
+
+
+def _svg_via_browser(svg_path: Path, png_path: Path) -> bool:
+    browser = _find_browser()
+    if not browser:
+        return False
+
+    work = Path(tempfile.mkdtemp(prefix="mascot_svg_", dir=str(TEMP_DIR)))
+    try:
+        local_svg = work / "mascot.svg"
+        shutil.copy2(svg_path, local_svg)
+        html_path = work / "mascot.html"
+        html_path.write_text(
+            f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+  html,body{{margin:0;padding:0;width:{FALLBACK_SIZE}px;height:{FALLBACK_SIZE}px;
+    background:#0F172A;display:flex;align-items:center;justify-content:center;overflow:hidden}}
+  img{{max-width:88%;max-height:88%}}
+</style></head>
+<body><img src="mascot.svg" alt="mascot"></body></html>
+""",
+            encoding="utf-8",
+        )
+        screenshot = work / "screenshot.png"
+        cmd = [
+            browser,
+            "--headless=new",
+            "--disable-gpu",
+            "--allow-file-access-from-files",
+            "--hide-scrollbars",
+            "--force-device-scale-factor=1",
+            f"--window-size={FALLBACK_SIZE},{FALLBACK_SIZE}",
+            f"--screenshot={_path_for_cli(screenshot)}",
+            html_path.resolve().as_uri(),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=40)
+        candidate = screenshot if screenshot.is_file() else work / "screenshot.png"
+        if not candidate.is_file():
+            cwd_shot = Path.cwd() / "screenshot.png"
+            if cwd_shot.is_file():
+                candidate = cwd_shot
+        if proc.returncode != 0 and not candidate.is_file():
+            raise RuntimeError(proc.stderr[-400:] if proc.stderr else "browser screenshot failed")
+        if not candidate.is_file():
+            return False
+        shutil.copy2(candidate, png_path)
+        if candidate == Path.cwd() / "screenshot.png":
+            try:
+                candidate.unlink()
+            except OSError:
+                pass
+        return True
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _svg_via_magick(svg_path: Path, png_path: Path) -> bool:
+    magick = shutil.which("magick") or shutil.which("convert")
+    if not magick:
+        return False
+    cmd = [
+        magick,
+        "-background", "#0F172A",
+        "-density", "192",
+        str(svg_path),
+        "-resize", f"{FALLBACK_SIZE}x{FALLBACK_SIZE}",
+        str(png_path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=40)
+    return proc.returncode == 0 and png_path.is_file()
+
+
+def _svg_via_ffmpeg(svg_path: Path, png_path: Path) -> bool:
+    if shutil.which("ffmpeg") is None:
+        return False
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(svg_path),
+        "-vf", f"scale={FALLBACK_SIZE}:{FALLBACK_SIZE}:force_original_aspect_ratio=decrease,"
+               f"pad={FALLBACK_SIZE}:{FALLBACK_SIZE}:(ow-iw)/2:(oh-ih)/2:color=0x0F172A",
+        str(png_path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=40)
+    return proc.returncode == 0 and png_path.is_file()
+
+
+def _find_browser() -> Optional[str]:
+    env_browser = os.getenv("PUPPETEER_EXECUTABLE_PATH") or os.getenv("CHROME_PATH")
+    candidates = [
+        env_browser,
+        shutil.which("msedge"),
+        shutil.which("chrome"),
+        shutil.which("google-chrome"),
+        shutil.which("chromium"),
+        shutil.which("chromium-browser"),
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+    ]
+    for path in candidates:
+        if path and Path(path).is_file():
+            return path
+    return None
+
+
+# ------------------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------------------
+def _remux_h264(video_path: Path, audio_path: Path, output_path: Path) -> Path:
+    """Ensure final deliverable is H.264 + AAC MP4."""
+    if shutil.which("ffmpeg") is None:
+        shutil.copy2(video_path, output_path)
+        return output_path
+
+    has_audio = _stream_has_audio(video_path)
+    if has_audio:
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(video_path),
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "18",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-shortest",
+            "-movflags", "+faststart",
+            str(output_path),
+        ]
+    else:
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(video_path),
+            "-i", str(audio_path),
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "18",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-shortest",
+            "-movflags", "+faststart",
+            str(output_path),
+        ]
+
+    logger.info("Remuxing to H.264 MP4 -> %s", output_path.name)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    if proc.returncode != 0 or not _is_valid_mp4(output_path):
+        if _is_valid_mp4(video_path):
+            shutil.copy2(video_path, output_path)
+            return output_path
+        raise RuntimeError(f"H.264 remux failed:\n{(proc.stderr or '')[-600:]}")
+    return output_path
+
+
+def _stream_has_audio(path: Path) -> bool:
+    if shutil.which("ffprobe") is None:
+        return True
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "a",
+        "-show_entries", "stream=codec_type",
+        "-of", "csv=p=0",
+        str(path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+    return "audio" in (proc.stdout or "").lower()
+
+
+def _download_first_ok(urls: list[str], dest: Path, min_bytes: int = 1024) -> Path:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    last_error: Optional[Exception] = None
+    for url in urls:
+        tmp = dest.with_suffix(dest.suffix + ".part")
+        try:
+            logger.info("Downloading %s", url)
+            urllib.request.urlretrieve(url, str(tmp))
+            if tmp.is_file() and tmp.stat().st_size >= min_bytes:
+                tmp.replace(dest)
+                return dest
+            last_error = RuntimeError(f"Downloaded file too small from {url}")
+        except (URLError, OSError, RuntimeError) as exc:
+            last_error = exc
+            logger.warning("Download failed (%s): %s", url, exc)
+        finally:
+            if tmp.is_file() and not dest.is_file():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+    raise RuntimeError(f"Could not download {dest.name}: {last_error}")
+
+
+def _media_duration(path: Path) -> float:
+    if shutil.which("ffprobe") is None:
+        logger.warning("ffprobe missing; defaulting duration to 3s")
+        return 3.0
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    try:
+        return max(float((proc.stdout or "").strip()), 0.1)
+    except ValueError:
+        logger.warning("Could not parse duration for %s", path.name)
+        return 3.0
+
+
+def _is_valid_mp4(path: Optional[Path]) -> bool:
+    if not path or not Path(path).is_file() or Path(path).stat().st_size < 1024:
+        return False
+    if shutil.which("ffprobe") is None:
+        return True
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=codec_name",
+        "-of", "csv=p=0",
+        str(path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+    codec = (proc.stdout or "").strip().lower()
+    return proc.returncode == 0 and bool(codec)
+
+
+def _path_for_cli(path: Path) -> str:
+    return str(path.resolve()).replace("\\", "/")
+
+
+__all__ = [
+    "generate_talking_mascot",
+    "resolve_pose_image",
+    "resolve_mascot_dir",
+    "VALID_POSES",
+]

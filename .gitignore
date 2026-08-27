@@ -1,0 +1,20 @@
+# Environment & Secrets (NEVER push API keys)
+.env
+*.env
+
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Render Outputs & Temporary Media Files
+Rendered_Output/
+temp/
+*.mp4
+*.mp3
+
+# OS Files
+.DS_Store
+Thumbs.db

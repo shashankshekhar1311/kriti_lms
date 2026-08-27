@@ -1,0 +1,8 @@
+# This file is used internally by FFMPEG.
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/UnderstandingLakhScene/3872808748_1545069676_223132457.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/UnderstandingLakhScene/2491015707_3547234367_147762604.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/UnderstandingLakhScene/2491015707_1657947503_1462653950.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/UnderstandingLakhScene/2491015707_381880811_686652941.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/UnderstandingLakhScene/2491015707_2163507214_2207252315.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/UnderstandingLakhScene/2491015707_4133974956_620898580.mp4'
+file 'file:E:/Kriti/media/videos/scene/1080p60/partial_movie_files/UnderstandingLakhScene/2491015707_2645707024_2649897237.mp4'
