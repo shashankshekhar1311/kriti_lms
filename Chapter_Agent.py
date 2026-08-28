@@ -1,6 +1,6 @@
 # ==============================================================================
-# Master Production Engine: Spatial Storyboard + Sentence-Timestamped Remotion
-# Place in: E:\Kriti\chapter_agent.py
+# Master Production Engine: Spatial Storyboard + Dynamic SDXL Story Backgrounds
+# Place in: E:\Kriti\chapter_agent.py (or Chapter_Agent.py)
 # ==============================================================================
 import os
 import sys
@@ -18,6 +18,14 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 warnings.filterwarnings("ignore")
+
+# Dynamic Image Generation Import
+try:
+    import torch
+    from diffusers import AutoPipelineForText2Image
+except ImportError:
+    torch = None
+    AutoPipelineForText2Image = None
 
 # Conditional Provider SDK Imports
 try:
@@ -81,60 +89,59 @@ ASSETS_DIR = BASE_DIR / "assets" / "mascots"
 REMOTION_DIR = BASE_DIR / "remotion"
 REMOTION_PUBLIC_DIR = REMOTION_DIR / "public"
 
+# Upgraded high-cadence natural neural voices
 MASCOT_VOICES = {
-    "gyanu": "en-US-JennyNeural",
-    "kito": "en-US-AnaNeural",
+    "gyanu": "en-US-AndrewMultilingualNeural",
+    "kito": "en-US-BrianNeural",
     "chirp": "en-IN-NeerjaNeural",
     "arya": "en-US-GuyNeural",
 }
 VOICE_ALIASES = {
-    "en-IN-JennyNeural": "en-US-JennyNeural",
-    "en-IN-Jenny": "en-US-JennyNeural",
+    "en-IN-JennyNeural": "en-US-AndrewMultilingualNeural",
+    "en-IN-Jenny": "en-US-AndrewMultilingualNeural",
 }
 TTS_FALLBACK_VOICES = (
+    "en-US-AndrewMultilingualNeural",
+    "en-US-BrianNeural",
     "en-US-JennyNeural",
     "en-IN-NeerjaNeural",
-    "en-IN-PrabhatNeural",
-    "en-GB-SoniaNeural",
 )
 
-# Edge TTS metadata uses 100-nanosecond ticks.
 TTS_TICKS_PER_SECOND = 10_000_000
 CANVAS_WIDTH = 1920
 CANVAS_HEIGHT = 1080
 
-# World-space keyframes: origin at canvas center, +x right, +y up (Manim-style).
 SPATIAL_PHASES = (
     {
         "phase": "Intro",
         "event_type": "intro",
         "mascot_pose": "talking",
-        "mascot": {"x": 0, "y": 100, "scale": 1.05},
-        "card": {"x": 0, "y": 280},
+        "mascot": {"x": 550, "y": -250, "scale": 1.0},
+        "card": {"x": -350, "y": 0},
         "glowing_badge": False,
     },
     {
         "phase": "Concept",
         "event_type": "concept_card",
         "mascot_pose": "neutral",
-        "mascot": {"x": -500, "y": -200, "scale": 0.98},
-        "card": {"x": 200, "y": 0},
+        "mascot": {"x": 550, "y": -250, "scale": 1.0},
+        "card": {"x": -350, "y": 0},
         "glowing_badge": False,
     },
     {
         "phase": "Worked Example",
         "event_type": "math_step",
         "mascot_pose": "pointing",
-        "mascot": {"x": 500, "y": -200, "scale": 0.92},
-        "card": {"x": -200, "y": 0},
+        "mascot": {"x": 550, "y": -250, "scale": 1.0},
+        "card": {"x": -350, "y": 0},
         "glowing_badge": False,
     },
     {
         "phase": "Recap",
         "event_type": "summary_badge",
         "mascot_pose": "happy",
-        "mascot": {"x": 0, "y": 0, "scale": 1.08},
-        "card": {"x": 0, "y": 120},
+        "mascot": {"x": 550, "y": -250, "scale": 1.05},
+        "card": {"x": -350, "y": 0},
         "glowing_badge": True,
     },
 )
@@ -166,8 +173,67 @@ if not (REMOTION_DIR / "package.json").is_file():
     print(f"\n❌ Remotion project not found at: {REMOTION_DIR}")
     sys.exit(1)
 
+# Global SDXL Pipeline Cache
+_SDXL_PIPE = None
+
 # ------------------------------------------------------------------------------
-# 2. JSON REPAIR ENGINE & NORMALIZERS
+# 2. DYNAMIC BACKGROUND GENERATOR
+# ------------------------------------------------------------------------------
+def generate_story_background(prompt_text: str, output_path: Path):
+    """Generate dynamic 1080p story background using SDXL Turbo on CUDA GPU."""
+    global _SDXL_PIPE
+    output_path = Path(output_path)
+    if output_path.is_file() and output_path.stat().st_size > 10_000:
+        print(f"   🎨 Reusing background image: {output_path.name}")
+        return output_path
+
+    print(f"   🎨 Generating dynamic story background...")
+    print(f"      Prompt: '{prompt_text[:90]}...'")
+
+    if AutoPipelineForText2Image is None or torch is None or not torch.cuda.is_available():
+        print("   ⚠️ GPU or diffusers unavailable. Creating solid dark fallback background.")
+        _create_fallback_background(output_path)
+        return output_path
+
+    try:
+        if _SDXL_PIPE is None:
+            _SDXL_PIPE = AutoPipelineForText2Image.from_pretrained(
+                "stabilityai/sdxl-turbo",
+                torch_dtype=torch.float16,
+                variant="fp16",
+            ).to("cuda")
+
+        image = _SDXL_PIPE(
+            prompt=f"{prompt_text}, cinematic lighting, photorealistic digital art, soft background blur, 8k --no text --no people",
+            num_inference_steps=2,
+            guidance_scale=0.0,
+            width=1024,
+            height=576,
+        ).images[0]
+
+        image = image.resize((1920, 1080))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        image.save(output_path, quality=92)
+        print(f"   ✅ Saved background to {output_path.name}")
+    except Exception as err:
+        print(f"   ⚠️ SDXL generation failed: {err}. Writing fallback background.")
+        _create_fallback_background(output_path)
+
+    return output_path
+
+def _create_fallback_background(output_path: Path):
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi",
+        "-i", "color=c=0f172a:s=1920x1080:d=1",
+        "-frames:v", "1",
+        str(output_path),
+    ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+# ------------------------------------------------------------------------------
+# 3. JSON REPAIR & NORMALIZERS
 # ------------------------------------------------------------------------------
 def clean_and_parse_json(raw_text):
     text = raw_text.strip()
@@ -293,7 +359,6 @@ def _as_xy(raw, fallback):
     return result
 
 def world_to_canvas(pos, include_scale=False, default_scale=1.0):
-    """Convert center-origin (+y up) offsets to Remotion canvas pixels."""
     x = float(pos.get("x", 0))
     y = float(pos.get("y", 0))
     looks_absolute = abs(x) > 700 or abs(y) > 500
@@ -348,16 +413,8 @@ def panels_to_visual_events(panels, narration_timeline):
             phase_hint=phase,
             fallback=spatial["event_type"],
         )
-        mascot_raw = (
-            panel.get("mascot_position")
-            or visual.get("mascot_position")
-            or spatial["mascot"]
-        )
-        card_raw = (
-            panel.get("card_position")
-            or visual.get("card_position")
-            or spatial["card"]
-        )
+        mascot_raw = panel.get("mascot_position") or visual.get("mascot_position") or spatial["mascot"]
+        card_raw = panel.get("card_position") or visual.get("card_position") or spatial["card"]
         title = visual.get("title") or panel.get("title") or spatial["phase"]
         items = visual.get("items")
         if items is None:
@@ -389,13 +446,15 @@ def panels_to_visual_events(panels, narration_timeline):
 
 def normalize_storyboard(lesson):
     if not isinstance(lesson, dict):
-        return "", "", [], []
+        return "", "", "", [], []
 
     lesson_title = ""
     for k in ["lesson_title", "title", "name"]:
         if k in lesson and isinstance(lesson[k], str) and lesson[k].strip():
             lesson_title = lesson[k].strip()
             break
+
+    background_prompt = lesson.get("background_prompt", "")
 
     narration_text = ""
     for k in ["narration_text", "narration", "script", "audio_script", "speech", "text"]:
@@ -416,10 +475,10 @@ def normalize_storyboard(lesson):
             if initial_quiz:
                 break
 
-    return lesson_title, narration_text, panels, initial_quiz
+    return lesson_title, background_prompt, narration_text, panels, initial_quiz
 
 # ------------------------------------------------------------------------------
-# 3. LLM GENERATION & QUIZ EXPANSION ENGINE
+# 4. LLM GENERATION & QUIZ EXPANSION ENGINE
 # ------------------------------------------------------------------------------
 def generate_micro_lessons(pdf_path, prompt, provider="anthropic", cache_file=None):
     if cache_file and cache_file.exists():
@@ -550,7 +609,7 @@ def expand_quiz_item_pool(lesson_title, pdf_text, initial_quiz, provider="anthro
     return {"item_pool": randomized}
 
 # ------------------------------------------------------------------------------
-# 4. TTS TIMESTAMPS, GPU LIP-SYNC & REMOTION RENDER
+# 5. TTS TIMESTAMPS, GPU LIP-SYNC & REMOTION RENDER
 # ------------------------------------------------------------------------------
 def get_media_duration(file_path):
     cmd = [
@@ -682,7 +741,6 @@ def _cli_tts_with_srt(text, dest, voice):
     return timeline
 
 def synthesize_narration_timeline(narration_text, voice, lesson_dir, attempts=3):
-    """Synthesize narration.mp3 and extract exact sentence start/end timestamps."""
     dest = lesson_dir / "narration.mp3"
     last_error = None
     used_voice = resolve_tts_voice(voice)
@@ -709,8 +767,7 @@ def synthesize_narration_timeline(narration_text, voice, lesson_dir, attempts=3)
                 time.sleep(1.2 * attempt)
 
     raise RuntimeError(
-        f"edge-tts produced no timestamped audio for voice {voice}. Last error: {last_error}. "
-        "If this is Docker/VPS, set EDGE_TTS_PROXY."
+        f"edge-tts produced no timestamped audio for voice {voice}. Last error: {last_error}."
     )
 
 def _timeline_from_probe(narration_text, audio_path):
@@ -729,15 +786,21 @@ def _timeline_from_probe(narration_text, audio_path):
     return timeline
 
 def resolve_mascot_pose_dir(mascot_name):
-    """Map a mascot to ``assets/mascots/{mascot_name}/`` (png/svg pose stills)."""
     try:
         return resolve_mascot_dir(mascot_name=mascot_name, hint=ASSETS_DIR / mascot_name.lower())
     except FileNotFoundError:
         return resolve_mascot_dir(mascot_name="gyanu", hint=ASSETS_DIR / "gyanu")
 
 def resolve_mascot_image(mascot_name, pose_type="talking"):
-    """Resolve one pose still: ``neutral.png``, ``talking.png``, ``pointing.png``, ``happy.png``."""
+    """Detect real_avatar.jpg / real_avatar.png first, fallback to standard stills."""
     mascot_dir = resolve_mascot_pose_dir(mascot_name)
+    
+    # Check for real photo/3D avatar assets first
+    for avatar_name in ["real_avatar.jpg", "real_avatar.png", "real_avatar.jpeg"]:
+        candidate = mascot_dir / avatar_name
+        if candidate.is_file():
+            return candidate
+
     return resolve_pose_image(
         mascot_image_path=mascot_dir,
         pose_type=pose_type,
@@ -789,11 +852,12 @@ def concat_mascot_clips(clip_paths, output_path):
         raise RuntimeError(f"ffmpeg mascot concat failed: {(result.stderr or '')[-400:]}")
     return output_path
 
-def assemble_remotion_props(lesson_title, student_name, narration_timeline, visual_events, mascot_clips=None):
+def assemble_remotion_props(lesson_title, student_name, narration_timeline, visual_events, bg_image_name, mascot_clips=None):
     clips = mascot_clips or []
     return {
         "lesson_title": lesson_title,
         "student_name": student_name or "Rahul",
+        "bg_image_url": bg_image_name,
         "talking_mascot_video_url": clips[0]["video_url"] if clips else "talking_mascot.mp4",
         "mascot_clips": clips,
         "narration_timeline": narration_timeline,
@@ -803,6 +867,12 @@ def assemble_remotion_props(lesson_title, student_name, narration_timeline, visu
 def render_remotion(props, lesson_dir, output_path):
     REMOTION_PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
     lesson_dir = Path(lesson_dir)
+
+    # Copy generated dynamic background image into remotion public folder
+    bg_src = lesson_dir / props.get("bg_image_url", "background.jpg")
+    if bg_src.is_file():
+        shutil.copy2(bg_src, REMOTION_PUBLIC_DIR / bg_src.name)
+        props["bg_image_url"] = bg_src.name
 
     published = []
     for clip in props.get("mascot_clips") or []:
@@ -865,8 +935,9 @@ def produce_comic_lesson(
     narration_text,
     panels,
     lesson_dir,
+    bg_image_name="background.jpg",
     mascot_name="gyanu",
-    voice="en-IN-PrabhatNeural",
+    voice="en-US-AndrewMultilingualNeural",
     student_name=None,
     force_regen=False,
 ):
@@ -943,6 +1014,7 @@ def produce_comic_lesson(
         student_name=student_name,
         narration_timeline=narration_timeline,
         visual_events=visual_events,
+        bg_image_name=bg_image_name,
         mascot_clips=mascot_clips,
     )
     output_path = lesson_dir / "output.mp4"
@@ -951,7 +1023,7 @@ def produce_comic_lesson(
     return output_path
 
 # ------------------------------------------------------------------------------
-# 5. CHAPTER PROCESSING ENGINE
+# 6. CHAPTER PROCESSING ENGINE
 # ------------------------------------------------------------------------------
 def build_storyboard_prompt(class_name, student_name):
     student = student_name or "Rahul"
@@ -961,96 +1033,36 @@ def build_storyboard_prompt(class_name, student_name):
 
     HARD RULES:
     - DO NOT write Python, Manim, JavaScript, or any source code.
-    - Coordinates are world-space offsets from canvas CENTER: +x right, +y up.
     - Output ONLY a JSON array of storyboard objects.
+
+    DYNAMIC BACKGROUND REQUIREMENT:
+    - Each lesson object MUST include a "background_prompt" string.
+    - Write a vivid photorealistic scene description matching the chapter topic beat (e.g., "Photorealistic ancient Indian marketplace with sacks of rice grains, golden sunset light, depth of field blur").
 
     CONVERSATIONAL NARRATION MANDATE:
     - Write a warm, friendly, storytelling teacher script speaking directly to the student ({student}).
-    - Avoid dry textbook statements. Use engaging questions ("Have you ever wondered...?", "Let's test this together!").
+    - Avoid dry textbook statements. Use engaging questions.
     - Target length: ~160-200 words (~75 seconds spoken).
-    - Narration must flow across four phases: Intro → Concept → Worked Example → Recap.
-    - Use complete sentences ending in . ! or ? so sentence timestamps can be extracted.
 
-    SPATIAL KEYFRAMES (required, in this order — copy these positions and poses exactly unless a tiny tweak is needed):
-    1. Phase 1 Intro: mascot at Center {{"x": 0, "y": 100}}, mascot_pose "talking". Hook the student.
-    2. Phase 2 Concept: mascot moves to Bottom-Left {{"x": -500, "y": -200}}, mascot_pose "neutral"; card at Center-Right {{"x": 200, "y": 0}}.
-    3. Phase 3 Worked Example: mascot moves to Bottom-Right {{"x": 500, "y": -200}}, mascot_pose "pointing"; math steps at Left {{"x": -200, "y": 0}}.
-    4. Phase 4 Recap: mascot returns to Center {{"x": 0, "y": 0}}, mascot_pose "happy", with a glowing badge (set glowing_badge true).
+    SPATIAL KEYFRAMES:
+    1. Phase 1 Intro: mascot at Bottom-Right {{"x": 550, "y": -250, "scale": 1.0}}, mascot_pose "talking".
+    2. Phase 2 Concept: mascot at Bottom-Right {{"x": 550, "y": -250, "scale": 1.0}}, mascot_pose "neutral"; card at Left {{"x": -350, "y": 0}}.
+    3. Phase 3 Worked Example: mascot at Bottom-Right {{"x": 550, "y": -250, "scale": 1.0}}, mascot_pose "pointing"; math card at Left {{"x": -350, "y": 0}}.
+    4. Phase 4 Recap: mascot at Bottom-Right {{"x": 550, "y": -250, "scale": 1.05}}, mascot_pose "happy", set glowing_badge true.
 
-    Each panel MUST include:
-      "phase": "Intro" | "Concept" | "Worked Example" | "Recap"
-      "mascot_pose": "talking" | "neutral" | "pointing" | "happy"
-      "mascot_position": {{"x": number, "y": number, "scale": number}}
-      "card_position": {{"x": number, "y": number}}
-      "glowing_badge": boolean (true only on Recap)
-      "visual_data": {{
-        "type": "intro" | "concept_card" | "math_step" | "summary_badge",
-        "title": "short on-screen heading",
-        "items": [strings and/or digits]
-      }}
-      visual_data.type mapping: Intro→intro, Concept→concept_card, Worked Example→math_step, Recap→summary_badge
-      mascot_pose mapping: Intro→talking, Concept→neutral, Worked Example→pointing, Recap→happy
-      items:
-        - intro: 3 short punchy bullets
-        - concept_card: digits like [3, 4, 5, 6] OR expanded values like ["3000", "400", "50", "6"]
-        - math_step: ordered calculation steps; last item is the final answer
-        - summary_badge: 3 recap lines
-
-    INITIAL QUIZ:
-    - Provide exactly 4 core questions in `initial_quiz`.
-    - Each question object:
-      "id": 1-4,
-      "type": "numerical" or "conceptual",
-      "question": "...",
-      "correct_answer": "...",
-      "explanation": "...",
-      "difficulty": "easy" | "medium" | "hard"
-
-    Return a valid JSON array. Each object MUST use these keys:
+    Return a valid JSON array matching:
     {{
       "lesson_title": "string",
+      "background_prompt": "string (SDXL photographic scene description --no text --no people)",
       "narration_text": "string (conversational teacher narration)",
-      "panels": [
-        {{
-          "phase": "Intro",
-          "mascot_pose": "talking",
-          "mascot_position": {{"x": 0, "y": 100, "scale": 1.05}},
-          "card_position": {{"x": 0, "y": 280}},
-          "glowing_badge": false,
-          "visual_data": {{"type": "intro", "title": "...", "items": ["...", "...", "..."]}}
-        }},
-        {{
-          "phase": "Concept",
-          "mascot_pose": "neutral",
-          "mascot_position": {{"x": -500, "y": -200, "scale": 0.98}},
-          "card_position": {{"x": 200, "y": 0}},
-          "glowing_badge": false,
-          "visual_data": {{"type": "concept_card", "title": "...", "items": [3, 4, 5, 6]}}
-        }},
-        {{
-          "phase": "Worked Example",
-          "mascot_pose": "pointing",
-          "mascot_position": {{"x": 500, "y": -200, "scale": 0.92}},
-          "card_position": {{"x": -200, "y": 0}},
-          "glowing_badge": false,
-          "visual_data": {{"type": "math_step", "title": "...", "items": ["step", "step", "answer"]}}
-        }},
-        {{
-          "phase": "Recap",
-          "mascot_pose": "happy",
-          "mascot_position": {{"x": 0, "y": 0, "scale": 1.08}},
-          "card_position": {{"x": 0, "y": 120}},
-          "glowing_badge": true,
-          "visual_data": {{"type": "summary_badge", "title": "...", "items": ["...", "...", "..."]}}
-        }}
-      ],
-      "initial_quiz": [ {{question object}}, {{question object}}, {{question object}}, {{question object}} ]
+      "panels": [...],
+      "initial_quiz": [...]
     }}
     """
 
 def process_chapter_pdf(pdf_path, class_name, subject_name, force_regen=False, provider="anthropic", mascot_name="gyanu", student_name=None):
     chapter_name = pdf_path.stem
-    voice = MASCOT_VOICES.get(mascot_name.lower(), "en-IN-PrabhatNeural")
+    voice = MASCOT_VOICES.get(mascot_name.lower(), "en-US-AndrewMultilingualNeural")
     pdf_text = extract_pdf_text(pdf_path)
 
     print(f"\n==================================================")
@@ -1074,13 +1086,18 @@ def process_chapter_pdf(pdf_path, class_name, subject_name, force_regen=False, p
         if not isinstance(lesson, dict):
             continue
 
-        title, narration_text, panels, initial_quiz = normalize_storyboard(lesson)
+        title, bg_prompt, narration_text, panels, initial_quiz = normalize_storyboard(lesson)
         title = title or f"Micro-Lesson {idx + 1}"
 
         print(f"\n⚡ [{chapter_name}] Processing Micro-Lesson {idx + 1}: {title}")
 
         lesson_dir = chapter_output_dir / f"Micro_Lesson_{idx + 1}"
         lesson_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. Generate story background via SDXL
+        bg_image_path = lesson_dir / "background.jpg"
+        fallback_prompt = f"Cinematic digital painting representing {title}, 8k resolution"
+        generate_story_background(bg_prompt or fallback_prompt, bg_image_path)
 
         storyboard_file = lesson_dir / "storyboard.json"
         with open(storyboard_file, "w", encoding="utf-8") as f:
@@ -1113,6 +1130,7 @@ def process_chapter_pdf(pdf_path, class_name, subject_name, force_regen=False, p
             narration_text=narration_text,
             panels=panels,
             lesson_dir=lesson_dir,
+            bg_image_name="background.jpg",
             mascot_name=mascot_name,
             voice=voice,
             student_name=student_name,
@@ -1120,7 +1138,7 @@ def process_chapter_pdf(pdf_path, class_name, subject_name, force_regen=False, p
         )
 
 # ------------------------------------------------------------------------------
-# 6. RECURSIVE BATCH ORCHESTRATION
+# 7. RECURSIVE BATCH ORCHESTRATION
 # ------------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description="Drona Engine Spatial Remotion + GPU Lip-Sync Agent")

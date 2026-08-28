@@ -3,6 +3,7 @@ import type {ComicLessonProps} from './schema';
 export const defaultComicLessonProps: ComicLessonProps = {
   lesson_title: 'Place Value: Building 3,456',
   student_name: 'Rahul',
+  bg_image_url: 'backgrounds/classroom.jpg',
   talking_mascot_video_url: 'mascot.mp4',
   mascot_clips: [
     {

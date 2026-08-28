@@ -65,6 +65,7 @@ BOUNCE_HZ = 2.2
 BOUNCE_AMP = 0.04
 CANVAS_BG = (15, 23, 42)  # slate-900
 RASTER_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+PHOTO_AVATAR_NAMES = ("real_avatar.jpg", "real_avatar.png", "real_avatar.jpeg")
 POSE_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".svg")
 VALID_POSES = ("neutral", "talking", "pointing", "happy")
 POSE_FALLBACK_CHAIN = {
@@ -106,10 +107,14 @@ def resolve_pose_image(
     pose_type: str = "talking",
     mascot_name: Optional[str] = None,
 ) -> Path:
-    """Pick ``{pose}.png`` (or svg/jpg) from the mascot asset directory.
+    """Pick the best face source from the mascot asset directory.
 
-    Search order per pose: ``.png``, ``.jpg``, ``.jpeg``, ``.webp``, ``.svg``.
-    Missing poses fall back (pointing/happy → talking → neutral).
+    Priority:
+        1. ``real_avatar.jpg`` / ``real_avatar.png`` (photographic avatar)
+        2. Pose stills: ``{pose}.png``, ``.jpg``, ``.jpeg``, ``.webp``, then ``.svg``
+        3. Explicit ``mascot_image_path`` file hint
+
+    Missing poses fall back (pointing/happy -> talking -> neutral).
     """
     pose = str(pose_type or "talking").strip().lower()
     if pose not in VALID_POSES:
@@ -121,6 +126,13 @@ def resolve_pose_image(
         mascot_name = hint.name if hint.is_dir() else hint.parent.name
 
     mascot_dir = resolve_mascot_dir(mascot_name=mascot_name, hint=hint)
+
+    for avatar_name in PHOTO_AVATAR_NAMES:
+        photo = mascot_dir / avatar_name
+        if photo.is_file():
+            logger.info("Photographic real avatar -> %s (pose=%s skipped)", photo.name, pose)
+            return photo
+
     chain: Sequence[str] = POSE_FALLBACK_CHAIN.get(pose, ("talking", "neutral"))
     for name in chain:
         for ext in POSE_IMAGE_EXTS:
@@ -138,7 +150,7 @@ def resolve_pose_image(
 
     raise FileNotFoundError(
         f"No pose image for '{pose}' in {mascot_dir} "
-        f"(expected one of {', '.join(f'{p}.png' for p in VALID_POSES)})"
+        f"(expected real_avatar.jpg/png or one of {', '.join(f'{p}.png' for p in VALID_POSES)})"
     )
 
 
@@ -149,12 +161,13 @@ def generate_talking_mascot(
     pose_type: str = "talking",
     mascot_name: Optional[str] = None,
 ) -> Path:
-    """Build a talking-mascot MP4 from a pose still (PNG/SVG) and TTS audio.
+    """Build a talking-mascot MP4 from a pose still and TTS audio.
 
-    ``pose_type`` selects ``neutral`` / ``talking`` / ``pointing`` / ``happy``
-    from ``assets/mascots/{mascot}/`` (or the directory of ``mascot_image_path``)
-    before GPU lip-sync. On CUDA, runs local Wav2Lip (or LivePortrait). Without
-    a GPU, falls back to a MoviePy/FFmpeg sine-wave bounce.
+    ``resolve_pose_image`` prefers ``real_avatar.jpg`` / ``real_avatar.png`` in
+    the mascot folder, then pose PNG/JPG stills, then SVG. Photographic JPG/PNG
+    frames are passed directly to Wav2Lip / LivePortrait (no SVG rasterization).
+    On CUDA, runs local Wav2Lip (or LivePortrait). Without a GPU, falls back to
+    a MoviePy/FFmpeg sine-wave bounce.
     """
     mascot_image_path = Path(mascot_image_path)
     audio_mp3_path = Path(audio_mp3_path)
@@ -170,17 +183,18 @@ def generate_talking_mascot(
 
     output_mp4_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Lip-sync pose=%s image=%s", pose_type, pose_image.name)
-    raster_path = _ensure_raster_image(pose_image)
+    bounce_path = _ensure_raster_image(pose_image)
 
     if _cuda_available():
         engines = _gpu_engine_order()
         for name in engines:
             try:
                 logger.info("GPU engine: %s on cuda:0", name)
+                face_source = _prepare_face_frame(pose_image, engine=name)
                 if name == "wav2lip":
-                    result = _generate_via_wav2lip(raster_path, audio_mp3_path, output_mp4_path)
+                    result = _generate_via_wav2lip(face_source, audio_mp3_path, output_mp4_path)
                 elif name == "liveportrait":
-                    result = _generate_via_liveportrait(raster_path, audio_mp3_path, output_mp4_path)
+                    result = _generate_via_liveportrait(face_source, audio_mp3_path, output_mp4_path)
                 else:
                     continue
                 if _is_valid_mp4(result):
@@ -193,7 +207,7 @@ def generate_talking_mascot(
     else:
         logger.info("CUDA unavailable (torch.cuda.is_available()=False); using CPU bounce")
 
-    return _generate_local_fallback(raster_path, audio_mp3_path, output_mp4_path)
+    return _generate_local_fallback(bounce_path, audio_mp3_path, output_mp4_path)
 
 
 # ------------------------------------------------------------------------------
@@ -329,7 +343,8 @@ def _generate_via_liveportrait(image_path: Path, audio_path: Path, output_path: 
     Official LivePortrait is driving-video based. This adapter looks for a
     Colab-friendly audio entrypoint (``inference_audio.py`` / ``app_audio.py``)
     or an installed ``liveportrait`` CLI. If none exist, raises so Wav2Lip /
-    bounce can take over.
+    bounce can take over. Expects a normalized JPG/PNG face frame (see
+    ``_prepare_face_frame``).
     """
     root = _ensure_liveportrait_repo()
     work = Path(tempfile.mkdtemp(prefix="liveportrait_", dir=str(TEMP_DIR)))
@@ -342,10 +357,11 @@ def _generate_via_liveportrait(image_path: Path, audio_path: Path, output_path: 
                 "Install a fork with inference_audio.py, or set LIP_SYNC_ENGINE=wav2lip."
             )
 
+        source_str = str(image_path.resolve())
         cmd = [
             sys.executable,
             str(script),
-            "--source", str(image_path.resolve()),
+            "--source", source_str,
             "--audio", str(audio_path.resolve()),
             "--output", str(raw_out),
             "--device", "cuda:0",
@@ -355,9 +371,10 @@ def _generate_via_liveportrait(image_path: Path, audio_path: Path, output_path: 
             cmd,
             [
                 sys.executable, str(script),
-                "--source_image", str(image_path.resolve()),
+                "--source_image", source_str,
                 "--driving_audio", str(audio_path.resolve()),
                 "--output", str(raw_out),
+                "--device", "cuda:0",
                 "--device_id", "0",
             ],
         ]
@@ -551,6 +568,64 @@ def _render_bounce_ffmpeg(image_path: Path, audio_path: Path, output_path: Path,
     if result.returncode != 0:
         tail = (result.stderr or "")[-800:]
         raise RuntimeError(f"ffmpeg bounce render failed:\n{tail}")
+
+
+# ------------------------------------------------------------------------------
+# Face frame preparation (photographic vs SVG)
+# ------------------------------------------------------------------------------
+def _is_photographic_avatar(path: Path) -> bool:
+    return path.suffix.lower() in {".jpg", ".jpeg", ".png"} or path.name.lower() in PHOTO_AVATAR_NAMES
+
+
+def _prepare_face_frame(image_path: Path, engine: str = "wav2lip") -> Path:
+    """Return a GPU-ready face frame.
+
+    Photographic JPG/PNG (including ``real_avatar.*``) are passed through without
+    SVG rasterization. LivePortrait additionally normalizes EXIF orientation and
+    RGB layout for reliable ``cuda:0`` inference.
+    """
+    suffix = image_path.suffix.lower()
+    if suffix == ".svg":
+        logger.info("%s: rasterizing SVG pose for GPU", engine)
+        return _ensure_raster_image(image_path)
+    if suffix not in RASTER_EXTS:
+        logger.warning("%s: unexpected format %s; attempting raster pass", engine, suffix)
+        return _ensure_raster_image(image_path)
+    if engine == "liveportrait":
+        return _normalize_photo_for_liveportrait(image_path)
+    if _is_photographic_avatar(image_path):
+        logger.info("%s: using photographic source directly -> %s", engine, image_path.name)
+    return image_path.resolve()
+
+
+def _normalize_photo_for_liveportrait(image_path: Path) -> Path:
+    """Strip EXIF rotation and emit a clean RGB JPEG for LivePortrait on cuda:0."""
+    suffix = image_path.suffix.lower()
+    if suffix not in {".jpg", ".jpeg", ".png"}:
+        return image_path.resolve()
+
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        logger.warning("Pillow missing; passing %s as-is to LivePortrait", image_path.name)
+        return image_path.resolve()
+
+    out = TEMP_DIR / f"{image_path.stem}_lp_{os.getpid()}.jpg"
+    with Image.open(image_path) as img:
+        img = ImageOps.exif_transpose(img)
+        img = img.convert("RGB")
+        max_edge = int(os.getenv("LIP_SYNC_MAX_FACE_EDGE", "1024"))
+        width, height = img.size
+        if max(width, height) > max_edge:
+            scale = max_edge / max(width, height)
+            img = img.resize(
+                (max(1, int(width * scale)), max(1, int(height * scale))),
+                Image.Resampling.LANCZOS,
+            )
+        img.save(out, format="JPEG", quality=95, optimize=True)
+
+    logger.info("LivePortrait: normalized %s -> %s (cuda:0)", image_path.name, out.name)
+    return out
 
 
 # ------------------------------------------------------------------------------
@@ -835,4 +910,5 @@ __all__ = [
     "resolve_pose_image",
     "resolve_mascot_dir",
     "VALID_POSES",
+    "PHOTO_AVATAR_NAMES",
 ]

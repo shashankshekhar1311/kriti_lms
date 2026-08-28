@@ -23,6 +23,26 @@ const existsInPublic = (fileName: string): boolean => {
 };
 
 /**
+ * Resolve a background or still image for Remotion <Img />.
+ * Supports remote URLs and files in public/.
+ */
+export const resolveImageSrc = (url: string): string | null => {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (isRemoteUrl(trimmed)) {
+    return trimmed;
+  }
+
+  const fileName = publicAssetName(trimmed);
+  if (!fileName) {
+    return null;
+  }
+  return staticFile(fileName);
+};
+
+/**
  * Remotion's OffthreadVideo compositor only fetches http(s) from public/.
  * Skip missing local files so the illustrated mascot fallback can render.
  */

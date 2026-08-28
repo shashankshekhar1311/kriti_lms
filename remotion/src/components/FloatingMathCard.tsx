@@ -1,18 +1,14 @@
 import {interpolate, useCurrentFrame, useVideoConfig} from 'remotion';
 import {motion} from 'framer-motion';
 import type {VisualEvent} from '../schema';
-import {COLORS, NEON, clampLines, ellipsis} from '../theme';
+import {COLORS, clampLines, ellipsis} from '../theme';
 import {bodyFont, displayFont} from '../fonts';
 import {useFadeSlide, popAt} from '../hooks/use-frame-motion';
-import {CONTENT_ZONE, placeFloatingCard} from '../layout';
+import {CARDS_ZONE, GLASS_CARD, placeFloatingCard} from '../layout';
 import {IntroCard} from './cards/IntroCard';
 import {PlaceValueGrid} from './cards/PlaceValueGrid';
 import {WorkedExample} from './cards/WorkedExample';
 
-/**
- * Math / concept cards render inside the Content Zone only.
- * max-width: 100% + local coordinates guarantee x never drops below 540px.
- */
 export const FloatingMathCard: React.FC<{
   event: VisualEvent;
   studentName: string;
@@ -31,9 +27,6 @@ export const FloatingMathCard: React.FC<{
     {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
   );
   const appear = enter * exit;
-  const accent = event.type === 'summary_badge' ? 'amber' : 'cyan';
-  const border = accent === 'amber' ? NEON.amberBorder : NEON.cyanBorder;
-  const glow = accent === 'amber' ? NEON.amberShadow : NEON.cyanShadow;
 
   return (
     <motion.div
@@ -45,10 +38,10 @@ export const FloatingMathCard: React.FC<{
         width: box.width,
         maxWidth: '100%',
         height: box.height,
-        maxHeight: CONTENT_ZONE.height,
+        maxHeight: CARDS_ZONE.height,
         zIndex: 5,
         opacity: appear,
-        transform: `translateY(${(1 - appear) * 28}px) scale(${0.9 + appear * 0.1})`,
+        transform: `translateY(${(1 - appear) * 28}px) scale(${0.96 + appear * 0.04})`,
         pointerEvents: 'none',
         boxSizing: 'border-box',
       }}
@@ -59,10 +52,12 @@ export const FloatingMathCard: React.FC<{
           maxWidth: '100%',
           height: '100%',
           boxSizing: 'border-box',
-          borderRadius: 28,
-          border,
-          boxShadow: glow,
-          background: 'rgba(17, 28, 51, 0.92)',
+          borderRadius: GLASS_CARD.borderRadius,
+          border: GLASS_CARD.border,
+          background: GLASS_CARD.background,
+          backdropFilter: GLASS_CARD.backdropFilter,
+          WebkitBackdropFilter: GLASS_CARD.WebkitBackdropFilter,
+          boxShadow: '0 16px 40px rgba(0, 0, 0, 0.35)',
           padding: event.type === 'summary_badge' ? '28px 28px 22px' : '22px 24px 20px',
           overflow: 'hidden',
           display: 'flex',
@@ -127,7 +122,7 @@ const SummaryContent: React.FC<{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          border: NEON.amberBorder,
+          border: `3px solid ${COLORS.amber}`,
           background: `radial-gradient(circle at 50% 40%, #FDE68A 0%, ${COLORS.amber} 42%, #B45309 100%)`,
           boxShadow: `0 0 ${16 + glow * 22}px ${COLORS.amberGlow}`,
           transform: `scale(${interpolate(badgePop, [0, 1], [0.55, 1], {
@@ -187,8 +182,8 @@ const SummaryContent: React.FC<{
               gap: 10,
               padding: '10px 14px',
               borderRadius: 14,
-              border: `2px solid ${COLORS.cyan}`,
-              background: COLORS.cyanSoft,
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              background: 'rgba(6, 182, 212, 0.12)',
               boxSizing: 'border-box',
             }}
           >

@@ -3,8 +3,8 @@ import {AbsoluteFill, interpolate, useCurrentFrame} from 'remotion';
 import {COLORS} from '../theme';
 import {bodyFont, displayFont} from '../fonts';
 import {ellipsis} from '../theme';
-import {AmbientBackground} from './AmbientBackground';
 
+/** Minimal stage chrome — background is supplied by DynamicBackground in ComicLesson. */
 export const FullCanvasStage: React.FC<{
   lessonTitle: string;
   studentName: string;
@@ -25,43 +25,6 @@ export const FullCanvasStage: React.FC<{
         overflow: 'hidden',
       }}
     >
-      <AmbientBackground />
-
-      <div
-        style={{
-          position: 'absolute',
-          left: -80,
-          bottom: -220,
-          width: 2080,
-          height: 460,
-          borderRadius: '50%',
-          background:
-            'radial-gradient(ellipse at 50% 30%, rgba(30, 41, 59, 0.95), rgba(2, 6, 23, 0.2) 72%)',
-          boxShadow: '0 -24px 80px rgba(6, 182, 212, 0.08)',
-          willChange: 'transform',
-          transform: 'translate3d(0, 0, 0)',
-          zIndex: 1,
-          pointerEvents: 'none',
-        }}
-      />
-
-      <div
-        style={{
-          position: 'absolute',
-          left: 120,
-          bottom: 70,
-          width: 1680,
-          height: 18,
-          borderRadius: 999,
-          background: 'rgba(6, 182, 212, 0.12)',
-          filter: 'blur(1px)',
-          willChange: 'transform',
-          transform: 'translate3d(0, 0, 0)',
-          zIndex: 1,
-          pointerEvents: 'none',
-        }}
-      />
-
       <div
         style={{
           position: 'absolute',
@@ -84,6 +47,8 @@ export const FullCanvasStage: React.FC<{
             background: 'rgba(15, 23, 42, 0.55)',
             border: '1px solid rgba(245, 158, 11, 0.45)',
             boxShadow: '0 0 18px rgba(245, 158, 11, 0.18)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
             display: 'flex',
             alignItems: 'baseline',
             gap: 16,

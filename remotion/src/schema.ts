@@ -39,6 +39,7 @@ export const visualEventSchema = z.object({
 export const comicLessonSchema = z.object({
   lesson_title: z.string(),
   student_name: z.string(),
+  bg_image_url: z.string(),
   talking_mascot_video_url: z.string(),
   mascot_clips: z.array(mascotClipSchema).optional(),
   narration_timeline: z.array(narrationLineSchema),
