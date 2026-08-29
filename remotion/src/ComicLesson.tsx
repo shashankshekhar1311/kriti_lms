@@ -15,6 +15,7 @@ import {DynamicMascotOverlay} from './components/DynamicMascotOverlay';
 import {WorldSpeechBubble} from './components/WorldSpeechBubble';
 import {FloatingMathCard} from './components/FloatingMathCard';
 import {ComicAudioFx} from './components/ComicAudioFx';
+import { MascotLayer } from "./MascotLayer";
 
 export const ComicLesson: React.FC<ComicLessonProps> = ({
   lesson_title,
@@ -81,6 +82,13 @@ export const ComicLesson: React.FC<ComicLessonProps> = ({
             1,
             secondsToFrames(clip.end_time, fps) - from,
           );
+          
+          // Match position from current visual event frame
+          const activeEvent =
+            visual_events.find(
+              (e) => time >= e.start_time && time <= e.end_time,
+            ) || visual_events[0];
+
           return (
             <Sequence
               key={`${clip.pose}-${clip.video_url}-${index}`}
@@ -89,10 +97,12 @@ export const ComicLesson: React.FC<ComicLessonProps> = ({
               name={`Mascot ${clip.pose}`}
               layout="none"
             >
-              <DynamicMascotOverlay
+              <MascotLayer
                 videoUrl={clip.video_url}
-                narrationVolume={NARRATION_VOLUME}
-                bobY={bobY}
+                pose={clip.pose}
+                position={
+                  activeEvent?.mascot_position || { x: 550, y: -250, scale: 1.0 }
+                }
               />
             </Sequence>
           );

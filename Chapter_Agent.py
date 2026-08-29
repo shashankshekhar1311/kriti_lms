@@ -27,6 +27,14 @@ except ImportError:
     torch = None
     AutoPipelineForText2Image = None
 
+# Background Removal Import
+try:
+    from rembg import remove
+    from PIL import Image
+except ImportError:
+    remove = None
+    Image = None
+
 # Conditional Provider SDK Imports
 try:
     from google import genai
@@ -89,7 +97,6 @@ ASSETS_DIR = BASE_DIR / "assets" / "mascots"
 REMOTION_DIR = BASE_DIR / "remotion"
 REMOTION_PUBLIC_DIR = REMOTION_DIR / "public"
 
-# Upgraded high-cadence natural neural voices
 MASCOT_VOICES = {
     "gyanu": "en-US-AndrewMultilingualNeural",
     "kito": "en-US-BrianNeural",
@@ -173,12 +180,36 @@ if not (REMOTION_DIR / "package.json").is_file():
     print(f"\n❌ Remotion project not found at: {REMOTION_DIR}")
     sys.exit(1)
 
-# Global SDXL Pipeline Cache
 _SDXL_PIPE = None
 
 # ------------------------------------------------------------------------------
-# 2. DYNAMIC BACKGROUND GENERATOR
+# 2. DYNAMIC BACKGROUND GENERATOR & REMBG INTEGRATION
 # ------------------------------------------------------------------------------
+def ensure_transparent_mascot(input_path: Path) -> Path:
+    """Strips solid background cards from mascot stills to create clean transparent PNGs."""
+    input_path = Path(input_path)
+    if not input_path.is_file():
+        return input_path
+
+    transparent_path = input_path.parent / f"{input_path.stem}_nobg.png"
+    if transparent_path.is_file() and transparent_path.stat().st_size > 1000:
+        return transparent_path
+
+    if remove is None or Image is None:
+        print("   ⚠️ rembg/PIL not installed. Skipping automatic background removal.")
+        return input_path
+
+    try:
+        print(f"   ✂️ Removing background from mascot still: {input_path.name}")
+        img = Image.open(input_path)
+        no_bg = remove(img)
+        transparent_path.parent.mkdir(parents=True, exist_ok=True)
+        no_bg.save(transparent_path, format="PNG")
+        return transparent_path
+    except Exception as err:
+        print(f"   ⚠️ Background removal failed: {err}")
+        return input_path
+
 def generate_story_background(prompt_text: str, output_path: Path):
     """Generate dynamic 1080p story background using SDXL Turbo on CUDA GPU."""
     global _SDXL_PIPE
@@ -233,7 +264,7 @@ def _create_fallback_background(output_path: Path):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 # ------------------------------------------------------------------------------
-# 3. JSON REPAIR & NORMALIZERS
+# 3. JSON REPAIR & TIMELINE NORMALIZERS
 # ------------------------------------------------------------------------------
 def clean_and_parse_json(raw_text):
     text = raw_text.strip()
@@ -373,41 +404,36 @@ def world_to_canvas(pos, include_scale=False, default_scale=1.0):
         canvas["scale"] = float(pos.get("scale", default_scale))
     return canvas
 
-def _phase_windows(timeline, count=4):
-    if not timeline:
-        return [(0.0, 1.0)] * count
-    n = len(timeline)
-    sizes = [n // count] * count
-    for i in range(n % count):
-        sizes[i] += 1
-    windows = []
-    idx = 0
-    last_end = 0.0
-    for size in sizes:
-        group = timeline[idx:idx + size]
-        idx += size
-        if group:
-            start = float(group[0]["start_time"])
-            end = float(group[-1]["end_time"])
-        else:
-            start = last_end
-            end = last_end
-        if end <= start:
-            end = start + 0.4
-        windows.append((round(start, 3), round(end, 3)))
-        last_end = end
-    return windows
-
-def panels_to_visual_events(panels, narration_timeline):
-    windows = _phase_windows(narration_timeline, len(SPATIAL_PHASES))
+def panels_to_visual_events_precise(panels, narration_timeline, lesson_dir):
+    """Align spatial panels to precise TTS sentence boundaries and generate contextual backgrounds per phase."""
     raw_panels = panels if isinstance(panels, list) else []
-    events = []
+    total_sentences = len(narration_timeline)
+    
+    if total_sentences >= 4:
+        s_per_phase = total_sentences // 4
+        phase_indices = [
+            (0, s_per_phase),
+            (s_per_phase, s_per_phase * 2),
+            (s_per_phase * 2, s_per_phase * 3),
+            (s_per_phase * 3, total_sentences)
+        ]
+    else:
+        phase_indices = [(i, min(i+1, total_sentences)) for i in range(min(4, total_sentences))]
 
+    events = []
     for idx, spatial in enumerate(SPATIAL_PHASES):
-        start_time, end_time = windows[idx]
+        if idx < len(phase_indices) and phase_indices[idx][0] < total_sentences:
+            start_idx, end_idx = phase_indices[idx]
+            start_time = float(narration_timeline[start_idx]["start_time"])
+            end_time = float(narration_timeline[end_idx - 1]["end_time"])
+        else:
+            last_end = events[-1]["end_time"] if events else 0.0
+            start_time, end_time = last_end, last_end + 5.0
+
         panel = raw_panels[idx] if idx < len(raw_panels) and isinstance(raw_panels[idx], dict) else {}
         visual = panel.get("visual_data") if isinstance(panel.get("visual_data"), dict) else panel
         phase = panel.get("phase") or panel.get("id") or panel.get("state") or spatial["phase"]
+        
         event_type = _normalize_event_type(
             visual.get("type") or visual.get("card_type") or panel.get("type"),
             phase_hint=phase,
@@ -416,9 +442,11 @@ def panels_to_visual_events(panels, narration_timeline):
         mascot_raw = panel.get("mascot_position") or visual.get("mascot_position") or spatial["mascot"]
         card_raw = panel.get("card_position") or visual.get("card_position") or spatial["card"]
         title = visual.get("title") or panel.get("title") or spatial["phase"]
+        
         items = visual.get("items")
         if items is None:
             items = visual.get("content") or visual.get("bullets") or []
+
         glowing = bool(
             panel.get("glowing_badge")
             if "glowing_badge" in panel
@@ -427,6 +455,13 @@ def panels_to_visual_events(panels, narration_timeline):
         pose = _normalize_mascot_pose(
             panel.get("mascot_pose") or visual.get("mascot_pose") or spatial["mascot_pose"]
         )
+
+        # Contextual background generation per phase beat
+        phase_bg_prompt = panel.get("bg_prompt") or visual.get("bg_prompt") or f"Cinematic digital art representing {title}"
+        bg_filename = f"bg_phase_{idx + 1}.jpg"
+        bg_path = lesson_dir / bg_filename
+        generate_story_background(phase_bg_prompt, bg_path)
+
         events.append({
             "type": event_type,
             "start_time": start_time,
@@ -441,7 +476,9 @@ def panels_to_visual_events(panels, narration_timeline):
             ),
             "card_position": world_to_canvas(_as_xy(card_raw, spatial["card"])),
             "glowing_badge": glowing,
+            "bg_image_url": bg_filename
         })
+
     return events
 
 def normalize_storyboard(lesson):
@@ -792,20 +829,25 @@ def resolve_mascot_pose_dir(mascot_name):
         return resolve_mascot_dir(mascot_name="gyanu", hint=ASSETS_DIR / "gyanu")
 
 def resolve_mascot_image(mascot_name, pose_type="talking"):
-    """Detect real_avatar.jpg / real_avatar.png first, fallback to standard stills."""
+    """Detects avatar images, strips background cards via rembg, and returns transparent PNG path."""
     mascot_dir = resolve_mascot_pose_dir(mascot_name)
     
-    # Check for real photo/3D avatar assets first
+    selected_file = None
     for avatar_name in ["real_avatar.jpg", "real_avatar.png", "real_avatar.jpeg"]:
         candidate = mascot_dir / avatar_name
         if candidate.is_file():
-            return candidate
+            selected_file = candidate
+            break
 
-    return resolve_pose_image(
-        mascot_image_path=mascot_dir,
-        pose_type=pose_type,
-        mascot_name=mascot_name,
-    )
+    if not selected_file:
+        selected_file = resolve_pose_image(
+            mascot_image_path=mascot_dir,
+            pose_type=pose_type,
+            mascot_name=mascot_name,
+        )
+
+    # Automatically remove white background card via rembg
+    return ensure_transparent_mascot(selected_file)
 
 def extract_audio_segment(src_audio, dest, start_time, end_time):
     duration = max(0.25, float(end_time) - float(start_time))
@@ -852,12 +894,12 @@ def concat_mascot_clips(clip_paths, output_path):
         raise RuntimeError(f"ffmpeg mascot concat failed: {(result.stderr or '')[-400:]}")
     return output_path
 
-def assemble_remotion_props(lesson_title, student_name, narration_timeline, visual_events, bg_image_name, mascot_clips=None):
+def assemble_remotion_props(lesson_title, student_name, narration_timeline, visual_events, mascot_clips=None):
     clips = mascot_clips or []
     return {
         "lesson_title": lesson_title,
         "student_name": student_name or "Rahul",
-        "bg_image_url": bg_image_name,
+        "bg_image_url": visual_events[0]["bg_image_url"] if visual_events else "background.jpg",
         "talking_mascot_video_url": clips[0]["video_url"] if clips else "talking_mascot.mp4",
         "mascot_clips": clips,
         "narration_timeline": narration_timeline,
@@ -868,11 +910,12 @@ def render_remotion(props, lesson_dir, output_path):
     REMOTION_PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
     lesson_dir = Path(lesson_dir)
 
-    # Copy generated dynamic background image into remotion public folder
-    bg_src = lesson_dir / props.get("bg_image_url", "background.jpg")
-    if bg_src.is_file():
-        shutil.copy2(bg_src, REMOTION_PUBLIC_DIR / bg_src.name)
-        props["bg_image_url"] = bg_src.name
+    for event in props.get("visual_events", []):
+        bg_name = event.get("bg_image_url")
+        if bg_name:
+            bg_src = lesson_dir / bg_name
+            if bg_src.is_file():
+                shutil.copy2(bg_src, REMOTION_PUBLIC_DIR / bg_name)
 
     published = []
     for clip in props.get("mascot_clips") or []:
@@ -935,7 +978,6 @@ def produce_comic_lesson(
     narration_text,
     panels,
     lesson_dir,
-    bg_image_name="background.jpg",
     mascot_name="gyanu",
     voice="en-US-AndrewMultilingualNeural",
     student_name=None,
@@ -948,7 +990,8 @@ def produce_comic_lesson(
     last_end = narration_timeline[-1]["end_time"] if narration_timeline else 0.0
     print(f"   ⏱️ Timeline ready: {len(narration_timeline)} sentences, {last_end:.2f}s ({used_voice})")
 
-    visual_events = panels_to_visual_events(panels, narration_timeline)
+    visual_events = panels_to_visual_events_precise(panels, narration_timeline, lesson_dir)
+    
     timeline_file = lesson_dir / "narration_timeline.json"
     with open(timeline_file, "w", encoding="utf-8") as f:
         json.dump(narration_timeline, f, indent=2)
@@ -1014,7 +1057,6 @@ def produce_comic_lesson(
         student_name=student_name,
         narration_timeline=narration_timeline,
         visual_events=visual_events,
-        bg_image_name=bg_image_name,
         mascot_clips=mascot_clips,
     )
     output_path = lesson_dir / "output.mp4"
@@ -1029,22 +1071,22 @@ def build_storyboard_prompt(class_name, student_name):
     student = student_name or "Rahul"
     return f"""
     You are the Senior Spatial Storyboard Director for Kriti School's Drona Engine.
-    Analyze this PDF chapter and generate EXACTLY 2 visual, story-driven micro-lessons for {class_name} students.
+    Analyze this PDF chapter and generate 2 to 3 micro-lessons for {class_name} students.
 
-    HARD RULES:
-    - DO NOT write Python, Manim, JavaScript, or any source code.
-    - Output ONLY a JSON array of storyboard objects.
+    STRICT TIME & WORD CAP MANDATE (2–3 MINUTE LESSONS):
+    - Each micro-lesson narration script MUST be between 300 and 350 words total (~2 to 2.5 minutes spoken).
+    - Break long chapter content across multiple lessons instead of overloading one lesson.
+    - OUTPUT ONLY a JSON array of storyboard objects.
 
-    DYNAMIC BACKGROUND REQUIREMENT:
-    - Each lesson object MUST include a "background_prompt" string.
-    - Write a vivid photorealistic scene description matching the chapter topic beat (e.g., "Photorealistic ancient Indian marketplace with sacks of rice grains, golden sunset light, depth of field blur").
+    CONTEXTUAL SDXL VISUAL BACKGROUNDS PER PHASE:
+    - Each panel object MUST include its own "bg_prompt" string matching that specific beat concept.
+    - Write photorealistic scene descriptions (e.g., "Photorealistic ancient Satavahana trading ship with two tall wooden masts on a blue ocean, 8k --no text --no people").
 
     CONVERSATIONAL NARRATION MANDATE:
     - Write a warm, friendly, storytelling teacher script speaking directly to the student ({student}).
     - Avoid dry textbook statements. Use engaging questions.
-    - Target length: ~160-200 words (~75 seconds spoken).
 
-    SPATIAL KEYFRAMES:
+    SPATIAL KEYFRAMES (EXACTLY 4 PANELS):
     1. Phase 1 Intro: mascot at Bottom-Right {{"x": 550, "y": -250, "scale": 1.0}}, mascot_pose "talking".
     2. Phase 2 Concept: mascot at Bottom-Right {{"x": 550, "y": -250, "scale": 1.0}}, mascot_pose "neutral"; card at Left {{"x": -350, "y": 0}}.
     3. Phase 3 Worked Example: mascot at Bottom-Right {{"x": 550, "y": -250, "scale": 1.0}}, mascot_pose "pointing"; math card at Left {{"x": -350, "y": 0}}.
@@ -1053,9 +1095,33 @@ def build_storyboard_prompt(class_name, student_name):
     Return a valid JSON array matching:
     {{
       "lesson_title": "string",
-      "background_prompt": "string (SDXL photographic scene description --no text --no people)",
-      "narration_text": "string (conversational teacher narration)",
-      "panels": [...],
+      "narration_text": "string (300-350 words max)",
+      "panels": [
+        {{
+          "phase": "Intro",
+          "bg_prompt": "Vivid SDXL scene description 1",
+          "title": "Intro Title",
+          "items": ["Point 1", "Point 2"]
+        }},
+        {{
+          "phase": "Concept",
+          "bg_prompt": "Vivid SDXL scene description 2",
+          "title": "Concept Title",
+          "items": ["Point 1", "Point 2"]
+        }},
+        {{
+          "phase": "Worked Example",
+          "bg_prompt": "Vivid SDXL scene description 3",
+          "title": "Example Title",
+          "items": ["Point 1", "Point 2"]
+        }},
+        {{
+          "phase": "Recap",
+          "bg_prompt": "Vivid SDXL scene description 4",
+          "title": "Recap Title",
+          "items": ["Summary Point 1", "Summary Point 2"]
+        }}
+      ],
       "initial_quiz": [...]
     }}
     """
@@ -1082,7 +1148,7 @@ def process_chapter_pdf(pdf_path, class_name, subject_name, force_regen=False, p
     lessons = ensure_lesson_list(lessons)
     print(f"🧩 Chapter broken into {len(lessons)} comic micro-lessons.")
 
-    for idx, lesson in enumerate(lessons[:2]):
+    for idx, lesson in enumerate(lessons):
         if not isinstance(lesson, dict):
             continue
 
@@ -1093,11 +1159,6 @@ def process_chapter_pdf(pdf_path, class_name, subject_name, force_regen=False, p
 
         lesson_dir = chapter_output_dir / f"Micro_Lesson_{idx + 1}"
         lesson_dir.mkdir(parents=True, exist_ok=True)
-
-        # 1. Generate story background via SDXL
-        bg_image_path = lesson_dir / "background.jpg"
-        fallback_prompt = f"Cinematic digital painting representing {title}, 8k resolution"
-        generate_story_background(bg_prompt or fallback_prompt, bg_image_path)
 
         storyboard_file = lesson_dir / "storyboard.json"
         with open(storyboard_file, "w", encoding="utf-8") as f:
@@ -1130,7 +1191,6 @@ def process_chapter_pdf(pdf_path, class_name, subject_name, force_regen=False, p
             narration_text=narration_text,
             panels=panels,
             lesson_dir=lesson_dir,
-            bg_image_name="background.jpg",
             mascot_name=mascot_name,
             voice=voice,
             student_name=student_name,
