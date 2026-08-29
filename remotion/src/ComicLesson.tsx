@@ -83,11 +83,20 @@ export const ComicLesson: React.FC<ComicLessonProps> = ({
             secondsToFrames(clip.end_time, fps) - from,
           );
           
-          // Match position from current visual event frame
+          // Match active visual event from timeline
           const activeEvent =
             visual_events.find(
               (e) => time >= e.start_time && time <= e.end_time,
             ) || visual_events[0];
+
+          // Hybrid Model: Show mascot ONLY during Intro and Recap phases
+          const isIntroOrRecap =
+            activeEvent?.type === 'intro' ||
+            activeEvent?.type === 'summary_badge';
+
+          if (!isIntroOrRecap) {
+            return null; // Hide mascot during Concept & Worked Example phases
+          }
 
           return (
             <Sequence
