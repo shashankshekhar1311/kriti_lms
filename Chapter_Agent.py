@@ -951,6 +951,8 @@ def render_remotion(props, lesson_dir, output_path):
         "ComicLesson",
         str(output_path),
         f"--props={props_file.resolve()}",
+        "--concurrency=4",          # Uses 4 CPU threads simultaneously
+        "--scale=0.75",             # Renders 720p/1080p proxy (2x faster)
         "--timeout=120000",
     ]
     print(f"   🎬 Headless Remotion render: {' '.join(cmd)}")
