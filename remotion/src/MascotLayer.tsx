@@ -1,4 +1,4 @@
-import { OffthreadVideo, useCurrentFrame, spring, useVideoConfig } from "remotion";
+import { OffthreadVideo, staticFile, useCurrentFrame, spring, useVideoConfig } from "remotion";
 import React from "react";
 
 interface MascotProps {
@@ -11,20 +11,20 @@ export const MascotLayer: React.FC<MascotProps> = ({ videoUrl, pose, position })
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
-  // Procedural breathing & subtle tilt
   const breathScale = 1 + Math.sin(frame / 12) * 0.012;
   const subtleTilt = Math.sin(frame / 18) * 1.8;
 
-  // Entrance spring animation
   const entranceSpring = spring({
     frame,
     fps,
     config: { damping: 12, stiffness: 100 },
   });
 
-  // Mirror image when pointing/talking toward the left card
   const shouldMirror = pose === "pointing" || pose === "talking";
   const mirrorTransform = shouldMirror ? "scaleX(-1)" : "scaleX(1)";
+
+  // Resolves assets stored in the Remotion public directory
+  const resolvedSrc = videoUrl.startsWith("http") ? videoUrl : staticFile(videoUrl);
 
   return (
     <div
@@ -46,7 +46,7 @@ export const MascotLayer: React.FC<MascotProps> = ({ videoUrl, pose, position })
       }}
     >
       <OffthreadVideo
-        src={videoUrl}
+        src={resolvedSrc}
         style={{
           width: "450px",
           height: "auto",
