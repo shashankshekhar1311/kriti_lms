@@ -48,6 +48,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libpango1.0-dev \
         libffi-dev \
         pkg-config \
+		libgl1-mesa-glx \
+        libglib2.0-0 \
+        libgomp1 \
         build-essential \
     && ln -sf /usr/bin/python3 /usr/bin/python \
     && python3 -m venv /opt/venv \
