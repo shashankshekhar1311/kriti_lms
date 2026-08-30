@@ -249,7 +249,7 @@ def _generate_via_wav2lip(image_path: Path, audio_path: Path, output_path: Path)
     work = Path(tempfile.mkdtemp(prefix="wav2lip_", dir=str(TEMP_DIR)))
     try:
         raw_out = work / "result_raw.mp4"
-        # Wav2Lip accepts a static face image when --fps is set.
+        # Wav2Lip accepts a static face image when --fps is set. Removed "--face_det_batch_size", "8",
         cmd = [
             sys.executable,
             str(root / "inference.py"),
@@ -260,8 +260,7 @@ def _generate_via_wav2lip(image_path: Path, audio_path: Path, output_path: Path)
             "--fps", str(FALLBACK_FPS),
             "--pads", "0", "20", "0", "0",
             "--resize_factor", "1",
-            "--wav2lip_batch_size", "64",
-            "--face_det_batch_size", "8",
+            "--wav2lip_batch_size", "64"
         ]
         logger.info("Wav2Lip inference: %s", " ".join(cmd[:6]) + " ...")
         env = os.environ.copy()
