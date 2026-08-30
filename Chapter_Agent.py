@@ -405,11 +405,10 @@ def world_to_canvas(pos, include_scale=False, default_scale=1.0):
     return canvas
 
 def panels_to_visual_events_precise(panels, narration_timeline, lesson_dir):
-    """Aligns visual cards strictly to the start and end timestamps of narration sentences."""
+    """Aligns visual cards strictly to narration timestamps and ensures valid layout types."""
     raw_panels = panels if isinstance(panels, list) else []
     total_sentences = len(narration_timeline)
     
-    # Calculate timestamps based on actual sentence bounds rather than hard division
     events = []
     chunk_size = max(1, total_sentences // max(1, len(raw_panels)))
     
@@ -420,17 +419,29 @@ def panels_to_visual_events_precise(panels, narration_timeline, lesson_dir):
         start_time = float(narration_timeline[start_sentence_idx]["start_time"])
         end_time = float(narration_timeline[end_sentence_idx]["end_time"])
         
+        phase_raw = panel.get("phase") or SPATIAL_PHASES[idx]["phase"]
+        raw_type = panel.get("type") or panel.get("card_type") or phase_raw
+        
+        # Normalize event type to valid layout keys: intro, concept_card, math_step, summary_badge
+        event_type = _normalize_event_type(raw_type, phase_hint=phase_raw, fallback=SPATIAL_PHASES[idx]["event_type"])
+
         bg_filename = f"bg_phase_{idx + 1}.jpg"
         generate_story_background(panel.get("bg_prompt", ""), lesson_dir / bg_filename)
 
         events.append({
-            "type": panel.get("phase", "intro").lower(),
+            "type": event_type,
             "start_time": start_time,
             "end_time": end_time,
             "title": str(panel.get("title", f"Phase {idx + 1}")),
             "items": _clean_items(panel.get("items", [])),
-            "mascot_pose": panel.get("mascot_pose", "talking"),
-            "mascot_position": {"x": 0, "y": 0, "scale": 1.0}, # Centered within panel
+            "mascot_pose": _normalize_mascot_pose(panel.get("mascot_pose"), SPATIAL_PHASES[idx]["mascot_pose"]),
+            "mascot_position": world_to_canvas(
+                _as_xy(panel.get("mascot_position"), SPATIAL_PHASES[idx]["mascot"]),
+                include_scale=True,
+                default_scale=SPATIAL_PHASES[idx]["mascot"].get("scale", 1.0)
+            ),
+            "card_position": world_to_canvas(_as_xy(panel.get("card_position"), SPATIAL_PHASES[idx]["card"])),
+            "glowing_badge": bool(panel.get("glowing_badge", SPATIAL_PHASES[idx]["glowing_badge"])),
             "bg_image_url": bg_filename
         })
     return events

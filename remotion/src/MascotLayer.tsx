@@ -30,30 +30,21 @@ export const MascotLayer: React.FC<MascotProps> = ({ videoUrl, pose, position })
     <div
       style={{
         position: "absolute",
-        left: `${position.x}px`,
-        top: `${position.y}px`,
-        transform: `
-          scale(${position.scale * entranceSpring * breathScale}) 
-          rotate(${subtleTilt}deg) 
-          ${mirrorTransform}
-        `,
-        transformOrigin: "bottom center",
-        transition: "top 0.4s ease-out, left 0.4s ease-out",
-        filter: `
-          drop-shadow(0px 20px 30px rgba(0, 0, 0, 0.75)) 
-          drop-shadow(0px 0px 15px rgba(255, 255, 255, 0.15))
-        `,
+        right: "60px",
+        bottom: "40px",
+        transform: `scale(${position.scale * entranceSpring * breathScale}) rotate(${subtleTilt}deg) ${mirrorTransform}`,
+        transformOrigin: "bottom right",
+        filter: "drop-shadow(0px 15px 25px rgba(0, 0, 0, 0.75))",
       }}
     >
-      <OffthreadVideo
-        src={resolvedSrc}
-        style={{
-          width: "450px",
-          height: "auto",
-          objectFit: "contain",
-          backgroundColor: "transparent",
-        }}
-      />
+    <OffthreadVideo
+      src={resolvedSrc}
+      style={{
+        width: "400px",
+        height: "auto",
+        backgroundColor: "transparent",
+      }}
+    />
     </div>
   );
 };
