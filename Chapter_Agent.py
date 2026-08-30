@@ -405,80 +405,34 @@ def world_to_canvas(pos, include_scale=False, default_scale=1.0):
     return canvas
 
 def panels_to_visual_events_precise(panels, narration_timeline, lesson_dir):
-    """Align spatial panels to precise TTS sentence boundaries and generate contextual backgrounds per phase."""
+    """Aligns visual cards strictly to the start and end timestamps of narration sentences."""
     raw_panels = panels if isinstance(panels, list) else []
     total_sentences = len(narration_timeline)
     
-    if total_sentences >= 4:
-        s_per_phase = total_sentences // 4
-        phase_indices = [
-            (0, s_per_phase),
-            (s_per_phase, s_per_phase * 2),
-            (s_per_phase * 2, s_per_phase * 3),
-            (s_per_phase * 3, total_sentences)
-        ]
-    else:
-        phase_indices = [(i, min(i+1, total_sentences)) for i in range(min(4, total_sentences))]
-
+    # Calculate timestamps based on actual sentence bounds rather than hard division
     events = []
-    for idx, spatial in enumerate(SPATIAL_PHASES):
-        if idx < len(phase_indices) and phase_indices[idx][0] < total_sentences:
-            start_idx, end_idx = phase_indices[idx]
-            start_time = float(narration_timeline[start_idx]["start_time"])
-            end_time = float(narration_timeline[end_idx - 1]["end_time"])
-        else:
-            last_end = events[-1]["end_time"] if events else 0.0
-            start_time, end_time = last_end, last_end + 5.0
-
-        panel = raw_panels[idx] if idx < len(raw_panels) and isinstance(raw_panels[idx], dict) else {}
-        visual = panel.get("visual_data") if isinstance(panel.get("visual_data"), dict) else panel
-        phase = panel.get("phase") or panel.get("id") or panel.get("state") or spatial["phase"]
+    chunk_size = max(1, total_sentences // max(1, len(raw_panels)))
+    
+    for idx, panel in enumerate(raw_panels[:4]):
+        start_sentence_idx = min(idx * chunk_size, total_sentences - 1)
+        end_sentence_idx = min((idx + 1) * chunk_size - 1, total_sentences - 1) if idx < 3 else total_sentences - 1
         
-        event_type = _normalize_event_type(
-            visual.get("type") or visual.get("card_type") or panel.get("type"),
-            phase_hint=phase,
-            fallback=spatial["event_type"],
-        )
-        mascot_raw = panel.get("mascot_position") or visual.get("mascot_position") or spatial["mascot"]
-        card_raw = panel.get("card_position") or visual.get("card_position") or spatial["card"]
-        title = visual.get("title") or panel.get("title") or spatial["phase"]
+        start_time = float(narration_timeline[start_sentence_idx]["start_time"])
+        end_time = float(narration_timeline[end_sentence_idx]["end_time"])
         
-        items = visual.get("items")
-        if items is None:
-            items = visual.get("content") or visual.get("bullets") or []
-
-        glowing = bool(
-            panel.get("glowing_badge")
-            if "glowing_badge" in panel
-            else visual.get("glowing_badge", spatial["glowing_badge"])
-        )
-        pose = _normalize_mascot_pose(
-            panel.get("mascot_pose") or visual.get("mascot_pose") or spatial["mascot_pose"]
-        )
-
-        # Contextual background generation per phase beat
-        phase_bg_prompt = panel.get("bg_prompt") or visual.get("bg_prompt") or f"Cinematic digital art representing {title}"
         bg_filename = f"bg_phase_{idx + 1}.jpg"
-        bg_path = lesson_dir / bg_filename
-        generate_story_background(phase_bg_prompt, bg_path)
+        generate_story_background(panel.get("bg_prompt", ""), lesson_dir / bg_filename)
 
         events.append({
-            "type": event_type,
+            "type": panel.get("phase", "intro").lower(),
             "start_time": start_time,
             "end_time": end_time,
-            "title": str(title),
-            "items": _clean_items(items) or [f"{spatial['phase']} beat"],
-            "mascot_pose": pose,
-            "mascot_position": world_to_canvas(
-                _as_xy(mascot_raw, spatial["mascot"]),
-                include_scale=True,
-                default_scale=spatial["mascot"].get("scale", 1.0),
-            ),
-            "card_position": world_to_canvas(_as_xy(card_raw, spatial["card"])),
-            "glowing_badge": glowing,
+            "title": str(panel.get("title", f"Phase {idx + 1}")),
+            "items": _clean_items(panel.get("items", [])),
+            "mascot_pose": panel.get("mascot_pose", "talking"),
+            "mascot_position": {"x": 0, "y": 0, "scale": 1.0}, # Centered within panel
             "bg_image_url": bg_filename
         })
-
     return events
 
 def normalize_storyboard(lesson):
