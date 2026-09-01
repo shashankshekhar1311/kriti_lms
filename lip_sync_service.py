@@ -338,6 +338,7 @@ def _generate_via_wav2lip(image_path: Path, audio_path: Path, output_path: Path)
     root = _ensure_wav2lip_repo()
     ckpt = _ensure_wav2lip_checkpoint(root)
     _ensure_s3fd_weights(root)
+    _ensure_mobilenet_weights(root)
 
     work = Path(tempfile.mkdtemp(prefix="wav2lip_", dir=str(TEMP_DIR)))
     try:
@@ -413,6 +414,18 @@ def _ensure_wav2lip_checkpoint(root: Path) -> Path:
     _download_first_ok(WAV2LIP_CKPT_URLS, dest, min_bytes=1_000_000)
     return dest
 
+MOBILENET_CKPT_URLS = [
+    "https://github.com/justinjohn0306/Wav2Lip/releases/download/models/mobilenet.pth",
+]
+
+def _ensure_mobilenet_weights(root: Path) -> Path:
+    dest = root / "checkpoints" / "mobilenet.pth"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_file() and dest.stat().st_size > 100_000:
+        return dest
+    logger.info("Downloading batch_face RetinaFace mobilenet checkpoint -> %s", dest)
+    _download_first_ok(MOBILENET_CKPT_URLS, dest, min_bytes=100_000)
+    return dest
 
 def _ensure_s3fd_weights(root: Path) -> Path:
     dest = root / "face_detection" / "detection" / "sfd" / "s3fd.pth"
