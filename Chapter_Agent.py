@@ -112,6 +112,7 @@ if str(BASE_DIR) not in sys.path:
 from lip_sync_service import (  # noqa: E402
     VALID_POSES,
     generate_talking_mascot,
+    resolve_lip_sync_mode,
     resolve_mascot_dir,
     resolve_pose_image,
 )
@@ -133,6 +134,10 @@ MASCOT_VOICES = {
     "kito": "en-US-BrianNeural",
     "chirp": "en-IN-NeerjaNeural",
     "arya": "en-US-GuyNeural",
+    # CHANGED — new mascot: Volt (original squirrel gadget-hero, see
+    # assets/mascots/volt/DESIGN_TOKENS.md). Distinct voice from Gyanu/Kito/
+    # Arya so a "choose your mascot" screen doesn't sound identical.
+    "volt": "en-US-ChristopherNeural",
 }
 VOICE_ALIASES = {
     "en-IN-JennyNeural": "en-US-AndrewMultilingualNeural",
@@ -1007,24 +1012,29 @@ def resolve_mascot_pose_dir(mascot_name):
     except FileNotFoundError:
         return resolve_mascot_dir(mascot_name="gyanu", hint=ASSETS_DIR / "gyanu")
 
-def resolve_mascot_image(mascot_name, pose_type="talking"):
+def resolve_mascot_image(mascot_name, pose_type="talking", *, lip_sync_mode=None):
     mascot_dir = resolve_mascot_pose_dir(mascot_name)
-    
-    selected_file = None
-    for avatar_name in ["real_avatar.jpg", "real_avatar.png", "real_avatar.jpeg"]:
-        candidate = mascot_dir / avatar_name
-        if candidate.is_file():
-            selected_file = candidate
-            break
+    mode = lip_sync_mode or resolve_lip_sync_mode(
+        mascot_dir,
+        force_presenter=_presenter_mode_enabled(),
+    )
+    prefer_photo = mode == "wav2lip"
 
-    if not selected_file:
-        selected_file = resolve_pose_image(
-            mascot_image_path=mascot_dir,
-            pose_type=pose_type,
-            mascot_name=mascot_name,
-        )
-
+    selected_file = resolve_pose_image(
+        mascot_image_path=mascot_dir,
+        pose_type=pose_type,
+        mascot_name=mascot_name,
+        prefer_photographic_avatar=prefer_photo,
+    )
     return ensure_transparent_mascot(selected_file)
+
+
+def _presenter_mode_enabled() -> bool:
+    return (os.getenv("LIP_SYNC_PRESENTER_MODE", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 def extract_audio_segment(src_audio, dest, start_time, end_time):
     duration = max(0.25, float(end_time) - float(start_time))
@@ -1149,19 +1159,45 @@ def render_remotion(props, lesson_dir, output_path):
             if bg_src.is_file():
                 shutil.copy2(bg_src, REMOTION_PUBLIC_DIR / bg_name)
 
-    published = []
+    published_videos = []
+    published_audio = []
     for clip in props.get("mascot_clips") or []:
+        mode = clip.get("lip_sync_mode", props.get("lip_sync_mode", "cartoon_svg"))
+        if mode == "cartoon_svg":
+            audio_name = clip.get("audio_url")
+            if not audio_name:
+                raise ValueError(f"Cartoon mascot clip missing audio_url: {clip}")
+            src = lesson_dir / Path(audio_name).name
+            if not src.is_file():
+                raise FileNotFoundError(f"Beat audio not found: {src}")
+            dest_name = src.name
+            shutil.copy2(src, REMOTION_PUBLIC_DIR / dest_name)
+            clip["audio_url"] = dest_name
+            published_audio.append(dest_name)
+            continue
+
         src = lesson_dir / Path(clip["video_url"]).name
         if not src.is_file():
             raise FileNotFoundError(f"Mascot clip not found: {src}")
         dest_name = src.name
         shutil.copy2(src, REMOTION_PUBLIC_DIR / dest_name)
         clip["video_url"] = dest_name
-        published.append(dest_name)
+        published_videos.append(dest_name)
 
-    if not published:
-        raise FileNotFoundError("No mascot clips were generated for this lesson.")
-    props["talking_mascot_video_url"] = published[0]
+    narration_name = props.get("narration_audio_url")
+    if narration_name:
+        narration_src = lesson_dir / Path(narration_name).name
+        if narration_src.is_file():
+            shutil.copy2(narration_src, REMOTION_PUBLIC_DIR / narration_src.name)
+            props["narration_audio_url"] = narration_src.name
+
+    if not published_videos and not published_audio:
+        raise FileNotFoundError("No mascot clips or beat audio were generated for this lesson.")
+
+    if published_videos:
+        props["talking_mascot_video_url"] = published_videos[0]
+    else:
+        props["talking_mascot_video_url"] = ""
 
     props_file = lesson_dir / "props.json"
     with open(props_file, "w", encoding="utf-8") as f:
@@ -1226,17 +1262,45 @@ def produce_comic_lesson(
         json.dump(narration_timeline, f, indent=2)
 
     mascot_dir = resolve_mascot_pose_dir(mascot_name)
+    mascot_id = str(mascot_name).strip().lower()
+    lip_sync_mode = resolve_lip_sync_mode(
+        mascot_dir,
+        force_presenter=_presenter_mode_enabled(),
+    )
     print(f"   🗂️ Pose directory: {mascot_dir}")
-    _log_gpu_status()
+    print(f"   🎭 Lip-sync mode: {lip_sync_mode} (mascot_id={mascot_id})")
+    if lip_sync_mode == "cartoon_svg":
+        print("   ✨ Cartoon SVG mouth-swap — skipping Wav2Lip GPU encode per beat")
+    else:
+        _log_gpu_status()
     _validate_sfx_assets()
 
     mascot_clips = []
     clip_paths = []
     for idx, event in enumerate(visual_events):
         pose = _normalize_mascot_pose(event.get("mascot_pose"), "talking")
+        beat_audio_name = f"beat_{idx}_{pose}.mp3"
+        beat_audio = lesson_dir / beat_audio_name
+        extract_audio_segment(full_audio_path, beat_audio, event["start_time"], event["end_time"])
+
+        if lip_sync_mode == "cartoon_svg":
+            print(
+                f"   🎙️ Cartoon beat {idx + 1}/{len(visual_events)} "
+                f"pose={pose} audio={beat_audio_name} "
+                f"[{event['start_time']:.2f}s–{event['end_time']:.2f}s]"
+            )
+            mascot_clips.append({
+                "audio_url": beat_audio_name,
+                "lip_sync_mode": "cartoon_svg",
+                "start_time": event["start_time"],
+                "end_time": event["end_time"],
+                "pose": pose,
+            })
+            continue
+
         clip_name = f"talking_mascot_{idx}_{pose}.{MASCOT_CLIP_EXT}"
         clip_path = lesson_dir / clip_name
-        pose_still = resolve_mascot_image(mascot_name, pose)
+        pose_still = resolve_mascot_image(mascot_name, pose, lip_sync_mode=lip_sync_mode)
         reuse_clip = (
             not force_regen
             and clip_path.is_file()
@@ -1245,8 +1309,6 @@ def produce_comic_lesson(
         if reuse_clip:
             print(f"   ♻️ Reusing {clip_name} ({clip_path.stat().st_size // 1024} KB)")
         else:
-            beat_audio = lesson_dir / f"beat_{idx}_{pose}.mp3"
-            extract_audio_segment(full_audio_path, beat_audio, event["start_time"], event["end_time"])
             print(
                 f"   🎭 GPU lip-sync beat {idx + 1}/{len(visual_events)} "
                 f"pose={pose} still={pose_still.name} "
@@ -1263,13 +1325,15 @@ def produce_comic_lesson(
                 beat_audio.unlink()
         mascot_clips.append({
             "video_url": clip_name,
+            "lip_sync_mode": "wav2lip",
             "start_time": event["start_time"],
             "end_time": event["end_time"],
             "pose": pose,
         })
         clip_paths.append(clip_path)
 
-    _aggregate_gpu_status(clip_paths, lesson_dir)
+    if clip_paths:
+        _aggregate_gpu_status(clip_paths, lesson_dir)
 
     props = assemble_remotion_props(
         lesson_title=lesson_title,
@@ -1277,6 +1341,9 @@ def produce_comic_lesson(
         narration_timeline=narration_timeline,
         visual_events=visual_events,
         mascot_clips=mascot_clips,
+        mascot_id=mascot_id,
+        lip_sync_mode=lip_sync_mode,
+        narration_audio_url="narration.mp3" if lip_sync_mode == "wav2lip" else None,
     )
     output_path = lesson_dir / "output.mp4"
     render_remotion(props, lesson_dir, output_path)
@@ -1284,13 +1351,26 @@ def produce_comic_lesson(
     return output_path
 
 
-def assemble_remotion_props(lesson_title, student_name, narration_timeline, visual_events, mascot_clips=None):
+def assemble_remotion_props(
+    lesson_title,
+    student_name,
+    narration_timeline,
+    visual_events,
+    mascot_clips=None,
+    mascot_id="gyanu",
+    lip_sync_mode="cartoon_svg",
+    narration_audio_url=None,
+):
     clips = mascot_clips or []
+    first_video = next((c.get("video_url") for c in clips if c.get("video_url")), "")
     return {
         "lesson_title": lesson_title,
         "student_name": student_name or "Rahul",
+        "mascot_id": mascot_id,
+        "lip_sync_mode": lip_sync_mode,
+        "narration_audio_url": narration_audio_url,
         "bg_image_url": visual_events[0]["bg_image_url"] if visual_events else "background.jpg",
-        "talking_mascot_video_url": clips[0]["video_url"] if clips else f"talking_mascot.{MASCOT_CLIP_EXT}",
+        "talking_mascot_video_url": first_video or f"talking_mascot.{MASCOT_CLIP_EXT}",
         "mascot_clips": clips,
         "narration_timeline": narration_timeline,
         "visual_events": visual_events,
@@ -1531,7 +1611,7 @@ def main():
     parser.add_argument("--subject", type=str, help="Filter by subject folder (e.g. Maths-Ganith-Prakash-I)")
     parser.add_argument("--chapter", type=str, help="Filter by chapter number or name (e.g. 1 or Chapter-1)")
     parser.add_argument("--provider", type=str, default="anthropic", choices=["gemini", "anthropic", "openai"], help="Select AI Provider")
-    parser.add_argument("--mascot", type=str, default="gyanu", choices=["gyanu", "kito", "chirp", "arya"], help="Select Mascot")
+    parser.add_argument("--mascot", type=str, default="gyanu", choices=["gyanu", "kito", "chirp", "arya", "volt"], help="Select Mascot")
     parser.add_argument("--student-name", type=str, help="Personalize video intro for student name (e.g. Rahul)")
     parser.add_argument("--force", action="store_true", help="Force regenerate storyboards and lip-sync bypassing cache")
     args = parser.parse_args()

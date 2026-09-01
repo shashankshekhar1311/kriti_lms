@@ -1,9 +1,9 @@
-import {Sequence, useCurrentFrame, useVideoConfig} from 'remotion';
-import type {ComicLessonProps} from './schema';
+import React from 'react';
+import {Audio, Sequence, staticFile, useCurrentFrame, useVideoConfig} from 'remotion';
+import type {ComicLessonProps, MascotClip} from './schema';
 import {
   activeNarrationText,
   eventWindow,
-  mascotTravelAmount,
   secondsToFrames,
 } from './timing';
 import {buildSfxTriggers} from './audio-triggers';
@@ -11,15 +11,23 @@ import {NARRATION_VOLUME, resolveSfxSrc} from './sfx';
 import {cardsZoneStyle, mascotPanelStyle} from './layout';
 import {FullCanvasStage} from './components/FullCanvasStage';
 import {DynamicBackground} from './components/DynamicBackground';
-import {DynamicMascotOverlay} from './components/DynamicMascotOverlay';
 import {WorldSpeechBubble} from './components/WorldSpeechBubble';
 import {FloatingMathCard} from './components/FloatingMathCard';
 import {ComicAudioFx} from './components/ComicAudioFx';
-import { MascotLayer } from "./MascotLayer";
+import {MascotLayer} from './MascotLayer';
+import {SvgMascotCharacter} from './components/SvgMascotCharacter';
+
+const resolveClipMode = (
+  clip: MascotClip,
+  lessonMode: ComicLessonProps['lip_sync_mode'],
+): 'cartoon_svg' | 'wav2lip' => clip.lip_sync_mode ?? lessonMode ?? 'cartoon_svg';
 
 export const ComicLesson: React.FC<ComicLessonProps> = ({
   lesson_title,
   student_name,
+  mascot_id = 'gyanu',
+  lip_sync_mode,
+  narration_audio_url,
   bg_image_url,
   talking_mascot_video_url,
   mascot_clips = [],
@@ -29,8 +37,6 @@ export const ComicLesson: React.FC<ComicLessonProps> = ({
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
   const time = frame / fps;
-  const travel = mascotTravelAmount(time, visual_events);
-  const bobY = Math.sin(frame * 0.42) * 6 * Math.max(0.25, travel);
   const speech = activeNarrationText(time, narration_timeline);
   const sfxTriggers = buildSfxTriggers(visual_events, fps).filter((trigger) =>
     Boolean(resolveSfxSrc(trigger.sfx)),
@@ -44,28 +50,12 @@ export const ComicLesson: React.FC<ComicLessonProps> = ({
             start_time: 0,
             end_time: durationInFrames / fps,
             pose: 'talking' as const,
+            lip_sync_mode: lip_sync_mode ?? 'wav2lip',
           },
         ];
 
   return (
     <FullCanvasStage lessonTitle={lesson_title} studentName={student_name}>
-      {/*
-        CHANGED: the background used to be one <DynamicBackground> fed only
-        the top-level `bg_image_url`, so every micro-lesson sat in the same
-        still image for its entire 2-3 minutes regardless of how many beats
-        it had. Chapter_Agent.py has always generated one SDXL image per
-        visual event (`event.bg_image_url`, see panels_to_visual_events_precise
-        in Chapter_Agent.py) — it just never made it into the schema or here.
-        Each beat now gets its own Sequence-scoped background, falling back
-        to the lesson-level image if a given event doesn't have its own.
-
-        NOTE: this is a hard cut between beats, not a cross-dissolve — the
-        existing DynamicBackground component doesn't currently expose an
-        entry/exit fade hook to blend across a Sequence boundary. Worth a
-        follow-up pass if the hard cut reads as too abrupt once you see it
-        in a real render; flagging it now rather than silently shipping a
-        half-finished crossfade.
-      */}
       {visual_events.length > 0 ? (
         visual_events.map((event, index) => {
           const window = eventWindow(event, fps);
@@ -86,6 +76,14 @@ export const ComicLesson: React.FC<ComicLessonProps> = ({
       )}
 
       <ComicAudioFx triggers={sfxTriggers} />
+
+      {narration_audio_url ? (
+        <Audio
+          src={staticFile(narration_audio_url)}
+          volume={NARRATION_VOLUME}
+          name="narration"
+        />
+      ) : null}
 
       <div style={cardsZoneStyle}>
         {visual_events.map((event, index) => {
@@ -117,20 +115,53 @@ export const ComicLesson: React.FC<ComicLessonProps> = ({
             1,
             secondsToFrames(clip.end_time, fps) - from,
           );
-          
-          // Match active visual event from timeline
+          const mode = resolveClipMode(clip, lip_sync_mode);
           const activeEvent =
             visual_events.find(
               (e) => time >= e.start_time && time <= e.end_time,
             ) || visual_events[0];
-
-          // Hybrid Model: Show mascot ONLY during Intro and Recap phases
           const isIntroOrRecap =
             activeEvent?.type === 'intro' ||
             activeEvent?.type === 'summary_badge';
+          const isCartoonClip = mode === 'cartoon_svg';
 
-          if (!isIntroOrRecap) {
-            return null; // Hide mascot during Concept & Worked Example phases
+          if (!isCartoonClip && !isIntroOrRecap) {
+            return null;
+          }
+
+          const position =
+            activeEvent?.mascot_position || {x: 550, y: -250, scale: 1.0};
+
+          if (isCartoonClip) {
+            if (!clip.audio_url) {
+              return null;
+            }
+
+            return (
+              <Sequence
+                key={`cartoon-${clip.pose}-${clip.audio_url}-${index}`}
+                from={from}
+                durationInFrames={durationInClip}
+                name={`Mascot ${clip.pose} (svg)`}
+                layout="none"
+              >
+                <Audio
+                  src={staticFile(clip.audio_url)}
+                  volume={NARRATION_VOLUME}
+                  name={`beat-${index}`}
+                />
+                <SvgMascotCharacter
+                  mascotId={mascot_id}
+                  pose={clip.pose}
+                  audioUrl={clip.audio_url}
+                  position={position}
+                />
+              </Sequence>
+            );
+          }
+
+          if (!clip.video_url) {
+            return null;
           }
 
           return (
@@ -144,9 +175,7 @@ export const ComicLesson: React.FC<ComicLessonProps> = ({
               <MascotLayer
                 videoUrl={clip.video_url}
                 pose={clip.pose}
-                position={
-                  activeEvent?.mascot_position || { x: 550, y: -250, scale: 1.0 }
-                }
+                position={position}
               />
             </Sequence>
           );

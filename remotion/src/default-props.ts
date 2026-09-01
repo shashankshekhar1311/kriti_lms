@@ -1,62 +1,30 @@
 import type {ComicLessonProps} from './schema';
 
+/**
+ * Studio preview: cartoon SVG mouth-swap for Gyanu (default mascot).
+ * Scrub the first 5 seconds — Gyanu's beak tracks beat audio amplitude.
+ */
 export const defaultComicLessonProps: ComicLessonProps = {
-  lesson_title: 'Place Value: Building 3,456',
+  lesson_title: 'Meet Gyanu — Cartoon Lip-Sync Preview',
   student_name: 'Rahul',
+  mascot_id: 'gyanu',
+  lip_sync_mode: 'cartoon_svg',
   bg_image_url: 'backgrounds/classroom.jpg',
-  // CHANGED: .webm — mascot clips now carry real alpha (see lip_sync_service.py)
-  talking_mascot_video_url: 'mascot.webm',
+  talking_mascot_video_url: '',
   mascot_clips: [
     {
-      video_url: 'mascot.webm',
+      audio_url: 'mascots/gyanu/beat_0_talking.mp3',
+      lip_sync_mode: 'cartoon_svg',
       start_time: 0,
       end_time: 5,
       pose: 'talking',
     },
-    {
-      video_url: 'mascot.webm',
-      start_time: 5,
-      end_time: 16.5,
-      pose: 'neutral',
-    },
-    {
-      video_url: 'mascot.webm',
-      start_time: 16.5,
-      end_time: 22.5,
-      pose: 'pointing',
-    },
-    {
-      video_url: 'mascot.webm',
-      start_time: 22.5,
-      end_time: 27.5,
-      pose: 'happy',
-    },
   ],
   narration_timeline: [
     {
-      text: 'Hey Rahul! Today we crack the secret of place value together.',
+      text: 'Hey Rahul! I am Gyanu — watch my beak move with the narration beat.',
       start_time: 0,
       end_time: 5,
-    },
-    {
-      text: 'Every digit has a job. Let us park 3,456 on the place grid.',
-      start_time: 5,
-      end_time: 10.5,
-    },
-    {
-      text: '3 lives in thousands, so it is worth 3,000. 4 hundreds ride next door.',
-      start_time: 10.5,
-      end_time: 16.5,
-    },
-    {
-      text: '5 tens and 6 ones join the team. Add the values and you get 3,456!',
-      start_time: 16.5,
-      end_time: 22.5,
-    },
-    {
-      text: 'Awesome work, Rahul. Remember: the place tells you the value!',
-      start_time: 22.5,
-      end_time: 27.5,
     },
   ],
   visual_events: [
@@ -64,73 +32,15 @@ export const defaultComicLessonProps: ComicLessonProps = {
       type: 'intro',
       start_time: 0,
       end_time: 5,
-      title: 'What is Place Value?',
+      title: 'Gyanu Mouth-Swap Test',
       items: [
-        'Every digit has a place',
-        'Place tells the value',
-        'Let us decode 3,456',
+        'Cartoon SVG owl mascot',
+        'Audio amplitude drives beak',
+        'No Wav2Lip / no GPU',
       ],
       mascot_position: {x: 960, y: 440, scale: 1.05},
       card_position: {x: 960, y: 260},
       mascot_pose: 'talking',
-      // CHANGED: per-event background — this is now actually read by
-      // ComicLesson.tsx instead of being ignored in favor of the top-level
-      // bg_image_url for the whole lesson.
-      bg_image_url: 'backgrounds/classroom.jpg',
-    },
-    {
-      type: 'concept_card',
-      start_time: 5,
-      end_time: 10.5,
-      title: '3,456 on the Place Grid',
-      items: [3, 4, 5, 6],
-      mascot_position: {x: 460, y: 740, scale: 0.98},
-      card_position: {x: 1160, y: 540},
-      mascot_pose: 'neutral',
-      bg_image_url: 'backgrounds/classroom.jpg',
-    },
-    {
-      type: 'concept_card',
-      start_time: 10.5,
-      end_time: 16.5,
-      title: 'Expanded Form',
-      items: ['3000', '400', '50', '6'],
-      mascot_position: {x: 460, y: 740, scale: 0.95},
-      card_position: {x: 1160, y: 540},
-      mascot_pose: 'neutral',
-      bg_image_url: 'backgrounds/classroom.jpg',
-    },
-    {
-      type: 'math_step',
-      start_time: 16.5,
-      end_time: 22.5,
-      title: 'Add the values',
-      items: [
-        '3 × 1000 = 3000',
-        '4 × 100 = 400',
-        '5 × 10 = 50',
-        '6 × 1 = 6',
-        '3000 + 400 + 50 + 6 = 3456',
-      ],
-      mascot_position: {x: 1460, y: 740, scale: 0.92},
-      card_position: {x: 760, y: 540},
-      mascot_pose: 'pointing',
-      bg_image_url: 'backgrounds/classroom.jpg',
-    },
-    {
-      type: 'summary_badge',
-      start_time: 22.5,
-      end_time: 27.5,
-      title: 'You nailed it!',
-      items: [
-        'Place = position',
-        'Value = digit × place',
-        '3,456 = 3000 + 400 + 50 + 6',
-      ],
-      mascot_position: {x: 960, y: 540, scale: 1.08},
-      card_position: {x: 960, y: 420},
-      glowing_badge: true,
-      mascot_pose: 'happy',
       bg_image_url: 'backgrounds/classroom.jpg',
     },
   ],

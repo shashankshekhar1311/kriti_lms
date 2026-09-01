@@ -97,6 +97,7 @@ CHROMA_KEY_HEX = "#00FF00"
 
 RASTER_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 PHOTO_AVATAR_NAMES = ("real_avatar.jpg", "real_avatar.png", "real_avatar.jpeg")
+LIP_SYNC_MODES = ("cartoon_svg", "wav2lip")
 POSE_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".svg")
 VALID_POSES = ("neutral", "talking", "pointing", "happy")
 POSE_FALLBACK_CHAIN = {
@@ -117,6 +118,29 @@ REQUIRE_GPU = (os.getenv("LIP_SYNC_REQUIRE_GPU", "") or "").strip().lower() in {
 # ------------------------------------------------------------------------------
 # Public API
 # ------------------------------------------------------------------------------
+def has_photographic_real_avatar(mascot_dir: Path) -> bool:
+    """Return True when a ``real_avatar.*`` file exists in the mascot folder."""
+    mascot_dir = Path(mascot_dir)
+    return any((mascot_dir / name).is_file() for name in PHOTO_AVATAR_NAMES)
+
+
+def resolve_lip_sync_mode(
+    mascot_dir: Path,
+    *,
+    force_presenter: bool = False,
+) -> str:
+    """Choose lip-sync engine for a mascot lesson.
+
+    Default is ``cartoon_svg`` (Remotion SVG mouth-swap). ``wav2lip`` is only
+    returned when a photographic ``real_avatar.*`` exists **and** presenter
+    mode is explicitly requested (``force_presenter=True`` or
+    ``LIP_SYNC_PRESENTER_MODE=1``).
+    """
+    if force_presenter and has_photographic_real_avatar(mascot_dir):
+        return "wav2lip"
+    return "cartoon_svg"
+
+
 def resolve_mascot_dir(
     mascot_name: Optional[str] = None,
     hint: Optional[Path] = None,
@@ -141,14 +165,17 @@ def resolve_pose_image(
     mascot_image_path: Optional[Path] = None,
     pose_type: str = "talking",
     mascot_name: Optional[str] = None,
+    *,
+    prefer_photographic_avatar: bool = False,
 ) -> Path:
     """Pick the best face source from the mascot asset directory.
 
-    Priority:
+    Priority when ``prefer_photographic_avatar`` is True (Wav2Lip presenter mode):
         1. ``real_avatar.jpg`` / ``real_avatar.png`` (photographic avatar)
         2. Pose stills: ``{pose}.png``, ``.jpg``, ``.jpeg``, ``.webp``, then ``.svg``
         3. Explicit ``mascot_image_path`` file hint
 
+    Cartoon mode (default) skips ``real_avatar.*`` and uses pose SVGs only.
     Missing poses fall back (pointing/happy -> talking -> neutral).
     """
     pose = str(pose_type or "talking").strip().lower()
@@ -162,11 +189,12 @@ def resolve_pose_image(
 
     mascot_dir = resolve_mascot_dir(mascot_name=mascot_name, hint=hint)
 
-    for avatar_name in PHOTO_AVATAR_NAMES:
-        photo = mascot_dir / avatar_name
-        if photo.is_file():
-            logger.info("Photographic real avatar -> %s (pose=%s skipped)", photo.name, pose)
-            return photo
+    if prefer_photographic_avatar:
+        for avatar_name in PHOTO_AVATAR_NAMES:
+            photo = mascot_dir / avatar_name
+            if photo.is_file():
+                logger.info("Photographic real avatar -> %s (pose=%s skipped)", photo.name, pose)
+                return photo
 
     chain: Sequence[str] = POSE_FALLBACK_CHAIN.get(pose, ("talking", "neutral"))
     for name in chain:
@@ -218,6 +246,7 @@ def generate_talking_mascot(
         mascot_image_path=mascot_image_path,
         pose_type=pose_type,
         mascot_name=mascot_name,
+        prefer_photographic_avatar=True,
     )
     if not audio_mp3_path.is_file():
         raise FileNotFoundError(f"TTS audio not found: {audio_mp3_path}")
@@ -677,17 +706,16 @@ def _render_bounce_ffmpeg(image_path: Path, audio_path: Path, output_path: Path,
 # CHANGED — new: chroma-key -> real alpha finalize step (used by every path)
 # ------------------------------------------------------------------------------
 def _finalize_alpha_video(raw_path: Path, output_path: Path) -> Path:
-    """Key the flat CHROMA_KEY_RGB background out of `raw_path` and encode a
-    genuine alpha-channel deliverable at `output_path` (VP9 in a WebM
-    container — supported natively by Remotion's <OffthreadVideo>).
-
-    This is the actual fix for the "mascot sits inside a visible dark box"
-    problem: previously the flat background was never removed, it was just
-    hoped to blend in via CSS, which cannot work with an opaque codec.
-    """
     if shutil.which("ffmpeg") is None:
         raise RuntimeError("ffmpeg is required to key out the chroma background")
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # CHANGED: timeout now scales with clip length instead of a flat 180s
+    # that failed on an 84s CPU-bounce fallback clip. Also switched VP9 to
+    # "realtime" deadline + row-based multithreading, which is dramatically
+    # faster than the default settings on Kaggle's shared CPU.
+    duration = _media_duration(raw_path)
+    dynamic_timeout = max(180, int(duration * 6) + 60)
 
     def _run(filter_chain: str) -> subprocess.CompletedProcess:
         cmd = [
@@ -698,15 +726,17 @@ def _finalize_alpha_video(raw_path: Path, output_path: Path) -> Path:
             "-pix_fmt", "yuva420p",
             "-auto-alt-ref", "0",
             "-b:v", "0",
-            "-crf", "28",
+            "-crf", "32",
+            "-deadline", "realtime",
+            "-cpu-used", "8",
+            "-row-mt", "1",
+            "-threads", "4",
             "-c:a", "libopus",
             "-b:a", "128k",
             str(output_path),
         ]
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=dynamic_timeout)
 
-    # `despill` removes green-tinge bleed at the mascot's edges; not every
-    # ffmpeg build ships it, so fall back to colorkey-only if it errors.
     chroma_hex = "0x{:02X}{:02X}{:02X}".format(*CHROMA_KEY_RGB)
     result = _run(f"colorkey={chroma_hex}:0.30:0.12,despill=type=green,format=yuva420p")
     if result.returncode != 0:
@@ -1065,9 +1095,12 @@ def _path_for_cli(path: Path) -> str:
 
 __all__ = [
     "generate_talking_mascot",
+    "has_photographic_real_avatar",
+    "resolve_lip_sync_mode",
     "resolve_pose_image",
     "resolve_mascot_dir",
     "VALID_POSES",
+    "LIP_SYNC_MODES",
     "PHOTO_AVATAR_NAMES",
     "CHROMA_KEY_RGB",
     "CHROMA_KEY_HEX",
