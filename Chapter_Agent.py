@@ -2,28 +2,35 @@
 # Master Production Engine: Spatial Storyboard + Dynamic SDXL Story Backgrounds
 # Place in: E:\Kriti\chapter_agent.py (or Chapter_Agent.py)
 #
-# CHANGED (transparency + honesty pass — see lip_sync_service.py for the
-# matching core changes):
-#   1. Mascot clips are now published as .webm (real alpha) instead of .mp4.
-#   2. The old "concatenate all pose clips into one talking_mascot.mp4" step
-#      re-encoded through libx264, which silently destroyed the alpha
-#      channel every single time regardless of what lip_sync_service
-#      produced. ComicLesson.tsx already supports a `mascot_clips` array
-#      played as separate Sequences, so that concatenation was never
-#      actually necessary — it's now skipped. `concat_mascot_clips` is left
-#      in place but unused/deprecated in case anything else in your repo
-#      calls it directly; do not use it for mascot clips going forward.
-#   3. After generating a lesson's mascot clips, the per-clip
-#      `<clip>.webm.status.json` sidecars written by lip_sync_service are
-#      aggregated into one `gpu_status.json` per lesson, so a degraded
-#      (CPU-fallback) render is visible in the output folder itself, not
-#      just in scrollback logs.
-#   4. New `_validate_sfx_assets()` warns loudly (does not fail the render)
-#      if pop/swoosh/chime.mp3 are near-silent — catches the setup script's
-#      1-second silent fallback quietly shipping in a "finished" video.
-#   5. `build_storyboard_prompt()` now explicitly caps title/item/chip label
-#      length, targeting the mid-word truncation bug at the content-
-#      generation source rather than only patching it in the UI layer.
+# CHANGED — PASS 1 (transparency + honesty pass, see lip_sync_service.py):
+#   1. Mascot clips published as .webm (real alpha) instead of .mp4; the old
+#      alpha-destroying concat-into-one-file step is skipped.
+#   2. Per-lesson gpu_status.json aggregation from lip_sync_service sidecars.
+#   3. _validate_sfx_assets() warns if pop/swoosh/chime.mp3 are near-silent.
+#   4. Storyboard prompt caps title/item/chip character length.
+#
+# CHANGED — PASS 2 (this pass — coverage & duration):
+#   5. Micro-lesson narration target raised from 300-350 words (~2-2.5 min)
+#      to NARRATION_WORDS_MIN-NARRATION_WORDS_MAX words (~3-4 min).
+#   6. Lesson COUNT is no longer hard-capped at "2 to 3" — the prompt now
+#      asks the model to identify every major topic in the chapter and
+#      produce one lesson per topic/cluster, with no artificial ceiling.
+#   7. Panel COUNT is no longer hard-capped at 4 (panels_to_visual_events_precise
+#      used to silently discard everything past panels[:4]), and no longer
+#      indexes into a fixed 4-slot SPATIAL_PHASES table (which would have
+#      raised IndexError the moment a lesson legitimately needed a 5th or
+#      6th panel). Replaced with `_phase_defaults(idx, total)`, which
+#      produces sensible mascot pose/position defaults for any panel count
+#      from MIN_PANELS_PER_LESSON to MAX_PANELS_PER_LESSON.
+#   8. NEW: a free (no extra API call), heuristic post-generation coverage
+#      check — _extract_key_terms() pulls likely named topics out of the
+#      source PDF text, _find_missing_terms() checks whether each one shows
+#      up anywhere in the combined narration across all generated lessons.
+#      If (and only if) something is missing, exactly ONE additional
+#      Anthropic call (generate_gap_fill_lesson) generates a single
+#      supplementary micro-lesson that specifically covers the gap, which
+#      then runs through the same pipeline (audio, mascot, Remotion render)
+#      as every other lesson. No API call is spent if nothing is missing.
 # ==============================================================================
 import os
 import sys
@@ -32,6 +39,7 @@ import time
 import re
 import random
 import shutil
+import unicodedata
 import warnings
 import argparse
 import asyncio
@@ -141,43 +149,13 @@ TTS_TICKS_PER_SECOND = 10_000_000
 CANVAS_WIDTH = 1920
 CANVAS_HEIGHT = 1080
 
-# CHANGED: mascot clips now carry real alpha as .webm — see lip_sync_service.py
 MASCOT_CLIP_EXT = "webm"
 
-SPATIAL_PHASES = (
-    {
-        "phase": "Intro",
-        "event_type": "intro",
-        "mascot_pose": "talking",
-        "mascot": {"x": 550, "y": -250, "scale": 1.0},
-        "card": {"x": -350, "y": 0},
-        "glowing_badge": False,
-    },
-    {
-        "phase": "Concept",
-        "event_type": "concept_card",
-        "mascot_pose": "neutral",
-        "mascot": {"x": 550, "y": -250, "scale": 1.0},
-        "card": {"x": -350, "y": 0},
-        "glowing_badge": False,
-    },
-    {
-        "phase": "Worked Example",
-        "event_type": "math_step",
-        "mascot_pose": "pointing",
-        "mascot": {"x": 550, "y": -250, "scale": 1.0},
-        "card": {"x": -350, "y": 0},
-        "glowing_badge": False,
-    },
-    {
-        "phase": "Recap",
-        "event_type": "summary_badge",
-        "mascot_pose": "happy",
-        "mascot": {"x": 550, "y": -250, "scale": 1.05},
-        "card": {"x": -350, "y": 0},
-        "glowing_badge": True,
-    },
-)
+NARRATION_WORDS_MIN = 450
+NARRATION_WORDS_MAX = 600
+
+MIN_PANELS_PER_LESSON = 2
+MAX_PANELS_PER_LESSON = 6
 
 PHASE_TO_EVENT_TYPE = {
     "intro": "intro",
@@ -193,8 +171,6 @@ PHASE_TO_EVENT_TYPE = {
 }
 VALID_EVENT_TYPES = {"intro", "concept_card", "math_step", "summary_badge"}
 
-# CHANGED: length caps that feed straight into the storyboard prompt, aimed
-# at stopping chip/label text from ever being long enough to need truncating.
 MAX_TITLE_CHARS = 42
 MAX_ITEM_CHARS = 30
 MAX_CHIP_CHARS = 20
@@ -218,7 +194,6 @@ _SDXL_PIPE = None
 # 2. DYNAMIC BACKGROUND GENERATOR & REMBG INTEGRATION
 # ------------------------------------------------------------------------------
 def ensure_transparent_mascot(input_path: Path) -> Path:
-    """Strips solid background cards from mascot stills to create clean transparent PNGs."""
     input_path = Path(input_path)
     if not input_path.is_file():
         return input_path
@@ -243,7 +218,6 @@ def ensure_transparent_mascot(input_path: Path) -> Path:
         return input_path
 
 def generate_story_background(prompt_text: str, output_path: Path):
-    """Generate dynamic 1080p story background using SDXL Turbo on CUDA GPU."""
     global _SDXL_PIPE
     output_path = Path(output_path)
     if output_path.is_file() and output_path.stat().st_size > 10_000:
@@ -436,26 +410,66 @@ def world_to_canvas(pos, include_scale=False, default_scale=1.0):
         canvas["scale"] = float(pos.get("scale", default_scale))
     return canvas
 
+
+def _phase_defaults(idx: int, total: int) -> dict:
+    is_first = idx == 0
+    is_last = idx == total - 1
+
+    if is_first:
+        event_type = "intro"
+        pose = "talking"
+        scale = 1.0
+    elif is_last:
+        event_type = "summary_badge"
+        pose = "happy"
+        scale = 1.05
+    else:
+        event_type = "concept_card"
+        pose = "pointing" if idx % 2 == 0 else "neutral"
+        scale = 1.0
+
+    return {
+        "event_type": event_type,
+        "mascot_pose": pose,
+        "mascot": {"x": 550, "y": -250, "scale": scale},
+        "card": {"x": -350, "y": 0},
+        "glowing_badge": is_last,
+    }
+
+
 def panels_to_visual_events_precise(panels, narration_timeline, lesson_dir):
-    """Aligns visual cards strictly to narration timestamps and ensures valid layout types."""
     raw_panels = panels if isinstance(panels, list) else []
+    if len(raw_panels) > MAX_PANELS_PER_LESSON:
+        print(
+            f"   ⚠️ Lesson requested {len(raw_panels)} panels, capping at "
+            f"MAX_PANELS_PER_LESSON={MAX_PANELS_PER_LESSON}. Consider raising "
+            f"that constant if this happens often."
+        )
+        raw_panels = raw_panels[:MAX_PANELS_PER_LESSON]
+
     total_sentences = len(narration_timeline)
-    
+    total_panels = len(raw_panels)
+
     events = []
-    chunk_size = max(1, total_sentences // max(1, len(raw_panels)))
-    
-    for idx, panel in enumerate(raw_panels[:4]):
+    chunk_size = max(1, total_sentences // max(1, total_panels))
+
+    for idx, panel in enumerate(raw_panels):
         start_sentence_idx = min(idx * chunk_size, total_sentences - 1)
-        end_sentence_idx = min((idx + 1) * chunk_size - 1, total_sentences - 1) if idx < 3 else total_sentences - 1
-        
+        end_sentence_idx = (
+            min((idx + 1) * chunk_size - 1, total_sentences - 1)
+            if idx < total_panels - 1
+            else total_sentences - 1
+        )
+
         start_time = float(narration_timeline[start_sentence_idx]["start_time"])
         end_time = float(narration_timeline[end_sentence_idx]["end_time"])
-        
-        phase_raw = panel.get("phase") or SPATIAL_PHASES[idx]["phase"]
+
+        defaults = _phase_defaults(idx, total_panels)
+
+        phase_raw = panel.get("phase") or defaults["event_type"]
         raw_type = panel.get("type") or panel.get("card_type") or phase_raw
-        
-        # Normalize event type to valid layout keys: intro, concept_card, math_step, summary_badge
-        event_type = _normalize_event_type(raw_type, phase_hint=phase_raw, fallback=SPATIAL_PHASES[idx]["event_type"])
+
+        event_type = _normalize_event_type(raw_type, phase_hint=phase_raw, fallback=defaults["event_type"])
 
         bg_filename = f"bg_phase_{idx + 1}.jpg"
         generate_story_background(panel.get("bg_prompt", ""), lesson_dir / bg_filename)
@@ -466,18 +480,14 @@ def panels_to_visual_events_precise(panels, narration_timeline, lesson_dir):
             "end_time": end_time,
             "title": str(panel.get("title", f"Phase {idx + 1}")),
             "items": _clean_items(panel.get("items", [])),
-            "mascot_pose": _normalize_mascot_pose(panel.get("mascot_pose"), SPATIAL_PHASES[idx]["mascot_pose"]),
+            "mascot_pose": _normalize_mascot_pose(panel.get("mascot_pose"), defaults["mascot_pose"]),
             "mascot_position": world_to_canvas(
-                _as_xy(panel.get("mascot_position"), SPATIAL_PHASES[idx]["mascot"]),
+                _as_xy(panel.get("mascot_position"), defaults["mascot"]),
                 include_scale=True,
-                default_scale=SPATIAL_PHASES[idx]["mascot"].get("scale", 1.0)
+                default_scale=defaults["mascot"].get("scale", 1.0)
             ),
-            "card_position": world_to_canvas(_as_xy(panel.get("card_position"), SPATIAL_PHASES[idx]["card"])),
-            "glowing_badge": bool(panel.get("glowing_badge", SPATIAL_PHASES[idx]["glowing_badge"])),
-            # NOTE: this per-event bg_image_url already existed here — it was
-            # simply never read on the Remotion side. See schema.ts /
-            # ComicLesson.tsx changes: the video now actually varies its
-            # background per beat instead of using only the top-level image.
+            "card_position": world_to_canvas(_as_xy(panel.get("card_position"), defaults["card"])),
+            "glowing_badge": bool(panel.get("glowing_badge", defaults["glowing_badge"])),
             "bg_image_url": bg_filename
         })
     return events
@@ -514,6 +524,174 @@ def normalize_storyboard(lesson):
                 break
 
     return lesson_title, background_prompt, narration_text, panels, initial_quiz
+
+
+# ------------------------------------------------------------------------------
+# 3b. Self-healing coverage check
+# ------------------------------------------------------------------------------
+_HEADING_STOPWORDS = {
+    "The", "This", "That", "These", "Those", "Chapter", "Figure", "Fig",
+    "Let", "What", "How", "Why", "Do", "In", "It", "We", "You", "Notice",
+    "Think", "About", "And", "But", "Who", "When", "Where", "Which",
+    "There", "Here", "Also", "Its", "His", "Her", "They", "Their",
+    "Class", "Page", "Grade", "Reprint", "Exploring", "Society", "Part",
+}
+
+
+def _normalize_for_match(text: str) -> str:
+    nfkd = unicodedata.normalize("NFKD", text)
+    ascii_text = "".join(c for c in nfkd if not unicodedata.combining(c))
+    return ascii_text.lower()
+
+
+def _extract_key_terms(pdf_text: str, max_terms: int = 24) -> list:
+    pattern = r"\b([A-Z][\w\u00C0-\u024F\u1E00-\u1EFF]*(?:\s+[A-Z][\w\u00C0-\u024F\u1E00-\u1EFF]*){0,2})"
+    candidates = re.findall(pattern, pdf_text)
+
+    counts = {}
+    for raw in candidates:
+        words = raw.split()
+        while words and words[0] in _HEADING_STOPWORDS:
+            words = words[1:]
+        if not words:
+            continue
+        term = " ".join(words)
+        if len(term) < 4:
+            continue
+        counts[term] = counts.get(term, 0) + 1
+
+    scored = [(term, n) for term, n in counts.items() if n >= 2 or " " in term]
+    scored.sort(key=lambda pair: -pair[1])
+
+    seen_norm = set()
+    terms = []
+    for term, _ in scored:
+        norm = _normalize_for_match(term)
+        if norm in seen_norm:
+            continue
+        seen_norm.add(norm)
+        terms.append(term)
+        if len(terms) >= max_terms:
+            break
+    return terms
+
+
+def _find_missing_terms(key_terms, all_narration_text: str) -> list:
+    haystack = _normalize_for_match(all_narration_text)
+    missing = []
+    for term in key_terms:
+        needle = _normalize_for_match(term)
+        if needle and needle not in haystack:
+            missing.append(term)
+    return missing
+
+
+def build_gap_fill_prompt(class_name, student_name, existing_lessons, missing_terms):
+    student = student_name or "Rahul"
+    existing_summary = "\n".join(
+        f"- {l.get('lesson_title') or l.get('title') or 'Untitled'}: "
+        f"{(l.get('narration_text') or l.get('narration') or '')[:200]}..."
+        for l in existing_lessons
+        if isinstance(l, dict)
+    )
+    terms_list = ", ".join(missing_terms)
+    return f"""
+    You are the Senior Spatial Storyboard Director for Kriti School's Drona Engine.
+
+    A chapter has already been broken into these micro-lessons:
+    {existing_summary}
+
+    An automated coverage check found these topics/names from the source chapter
+    that do NOT appear to be covered by any lesson above:
+    {terms_list}
+
+    Generate EXACTLY ONE additional micro-lesson that specifically covers these
+    missing topics, in the same warm, conversational storytelling style speaking
+    directly to {student}. Do not repeat material already covered above — this
+    lesson exists purely to fill the gap.
+
+    STRICT TIME & WORD CAP MANDATE:
+    - Narration script MUST be between {NARRATION_WORDS_MIN} and {NARRATION_WORDS_MAX} words.
+
+    STRICT ON-SCREEN TEXT LENGTH MANDATE (prevents mid-word truncation in the video UI):
+    - Every "title" string MUST be {MAX_TITLE_CHARS} characters or fewer.
+    - Every string inside "items" MUST be {MAX_ITEM_CHARS} characters or fewer.
+    - Chip/label-style short phrases MUST be {MAX_CHIP_CHARS} characters or fewer.
+
+    PANEL COUNT: use between {MIN_PANELS_PER_LESSON} and {MAX_PANELS_PER_LESSON}
+    panels — one panel per distinct missing topic, not merged together. Each
+    panel needs: "phase", "bg_prompt", "title", "items" (array of short strings),
+    and optionally "type" (one of: intro, concept_card, math_step, summary_badge)
+    and "mascot_pose" (one of: talking, neutral, pointing, happy).
+
+    Return ONLY a single valid JSON OBJECT (not an array) matching:
+    {{
+      "lesson_title": "string",
+      "narration_text": "string ({NARRATION_WORDS_MIN}-{NARRATION_WORDS_MAX} words)",
+      "panels": [
+        {{"phase": "Intro", "bg_prompt": "...", "title": "...", "items": ["..."]}}
+      ],
+      "initial_quiz": []
+    }}
+    """
+
+
+def generate_gap_fill_lesson(pdf_text, existing_lessons, missing_terms, provider, class_name, student_name):
+    prompt = build_gap_fill_prompt(class_name, student_name, existing_lessons, missing_terms)
+    provider = provider.lower()
+
+    if provider == "anthropic":
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+        if not anthropic_key:
+            raise RuntimeError("ANTHROPIC_API_KEY missing in .env")
+        client = anthropic.Anthropic(api_key=anthropic_key)
+
+        anthropic_candidates = ["claude-sonnet-4-6", "claude-3-5-sonnet-20241022"]
+        res = None
+        for model_id in anthropic_candidates:
+            try:
+                res = client.messages.create(
+                    model=model_id,
+                    max_tokens=4096,
+                    messages=[{
+                        "role": "user",
+                        "content": (
+                            f"PDF TEXT CONTENT:\n{pdf_text[:15000]}\n\n"
+                            f"PROMPT:\n{prompt}\n\n"
+                            f"RETURN ONLY VALID UNWRAPPED JSON OBJECT."
+                        ),
+                    }],
+                )
+                break
+            except anthropic.NotFoundError:
+                continue
+        if res is None:
+            raise RuntimeError("Gap-fill generation failed: all candidate Anthropic models failed.")
+        parsed = clean_and_parse_json(res.content[0].text)
+
+    elif provider == "gemini":
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if not gemini_key:
+            raise RuntimeError("GEMINI_API_KEY missing in .env")
+        client = genai.Client(api_key=gemini_key)
+        res = client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=[f"PDF TEXT CONTENT:\n{pdf_text[:15000]}\n\nPROMPT:\n{prompt}"],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.2,
+                max_output_tokens=4096,
+            ),
+        )
+        parsed = clean_and_parse_json(res.text)
+
+    else:
+        raise RuntimeError(f"Gap-fill generation is not implemented for provider={provider!r}")
+
+    if isinstance(parsed, list):
+        parsed = parsed[0] if parsed else {}
+    return parsed if isinstance(parsed, dict) else {}
+
 
 # ------------------------------------------------------------------------------
 # 4. LLM GENERATION & QUIZ EXPANSION ENGINE
@@ -830,7 +1008,6 @@ def resolve_mascot_pose_dir(mascot_name):
         return resolve_mascot_dir(mascot_name="gyanu", hint=ASSETS_DIR / "gyanu")
 
 def resolve_mascot_image(mascot_name, pose_type="talking"):
-    """Detects avatar images, strips background cards via rembg, and returns transparent PNG path."""
     mascot_dir = resolve_mascot_pose_dir(mascot_name)
     
     selected_file = None
@@ -847,7 +1024,6 @@ def resolve_mascot_image(mascot_name, pose_type="talking"):
             mascot_name=mascot_name,
         )
 
-    # Automatically remove white background card via rembg
     return ensure_transparent_mascot(selected_file)
 
 def extract_audio_segment(src_audio, dest, start_time, end_time):
@@ -872,11 +1048,8 @@ def extract_audio_segment(src_audio, dest, start_time, end_time):
 
 def concat_mascot_clips(clip_paths, output_path):
     """DEPRECATED for mascot clips: re-encoding through libx264 here destroys
-    any alpha channel produced by lip_sync_service.py. ComicLesson.tsx already
-    plays `mascot_clips` as separate per-pose Sequences, so concatenation is
-    unnecessary for the mascot pipeline — kept only in case another part of
-    your codebase depends on this exact function signature. Do not wire this
-    back into produce_comic_lesson() for mascot clips.
+    any alpha channel produced by lip_sync_service.py. Do not wire this back
+    into produce_comic_lesson() for mascot clips.
     """
     output_path = Path(output_path)
     list_file = output_path.parent / "mascot_concat.txt"
@@ -904,10 +1077,6 @@ def concat_mascot_clips(clip_paths, output_path):
 
 
 def _is_effectively_silent(path: Path, floor_db: float = -50.0) -> bool:
-    """CHANGED — new: detects the 1-second silent SFX fallback (or any other
-    accidentally-silent audio asset) via ffmpeg's volumedetect filter, so a
-    "finished" render can't quietly ship with dead sound effects.
-    """
     path = Path(path)
     if not path.is_file():
         return True
@@ -919,16 +1088,11 @@ def _is_effectively_silent(path: Path, floor_db: float = -50.0) -> bool:
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
     match = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?)\s*dB", result.stderr or "")
     if not match:
-        # Could not measure — don't block the render over an inconclusive probe.
         return False
     return float(match.group(1)) <= floor_db
 
 
 def _validate_sfx_assets():
-    """CHANGED — new: warns (does not raise) if any of the expected SFX files
-    are missing or near-silent, e.g. the setup script's 1-second silent
-    fallback. Call once near the start of a chapter run.
-    """
     sfx_dir = REMOTION_PUBLIC_DIR / "sfx"
     for name in ("pop.mp3", "swoosh.mp3", "chime.mp3"):
         candidate = sfx_dir / name
@@ -948,11 +1112,6 @@ def _validate_sfx_assets():
 
 
 def _aggregate_gpu_status(clip_paths, lesson_dir):
-    """CHANGED — new: reads the per-clip `<clip>.webm.status.json` sidecars
-    written by lip_sync_service.generate_talking_mascot() and rolls them up
-    into one gpu_status.json per lesson, so a CPU-fallback (motionless)
-    render is visible in the output folder itself.
-    """
     statuses = []
     any_fallback = False
     for clip_path in clip_paths:
@@ -990,10 +1149,6 @@ def render_remotion(props, lesson_dir, output_path):
             if bg_src.is_file():
                 shutil.copy2(bg_src, REMOTION_PUBLIC_DIR / bg_name)
 
-    # CHANGED: publish each mascot clip individually as-is (.webm, alpha
-    # intact). No more concatenation into a single talking_mascot.mp4 — that
-    # step used to re-encode through libx264 and silently drop the alpha
-    # channel every time, regardless of what lip_sync_service produced.
     published = []
     for clip in props.get("mascot_clips") or []:
         src = lesson_dir / Path(clip["video_url"]).name
@@ -1006,8 +1161,6 @@ def render_remotion(props, lesson_dir, output_path):
 
     if not published:
         raise FileNotFoundError("No mascot clips were generated for this lesson.")
-    # Schema requires a top-level talking_mascot_video_url string; ComicLesson.tsx
-    # only actually uses it when `mascot_clips` is empty, so this is a safe fallback.
     props["talking_mascot_video_url"] = published[0]
 
     props_file = lesson_dir / "props.json"
@@ -1025,8 +1178,8 @@ def render_remotion(props, lesson_dir, output_path):
         "ComicLesson",
         str(output_path),
         f"--props={props_file.resolve()}",
-        "--concurrency=4",          # Uses 4 CPU threads simultaneously
-        "--scale=0.75",             # Renders 720p/1080p proxy (2x faster)
+        "--concurrency=4",
+        "--scale=0.75",
         "--timeout=120000",
     ]
     print(f"   🎬 Headless Remotion render: {' '.join(cmd)}")
@@ -1081,7 +1234,6 @@ def produce_comic_lesson(
     clip_paths = []
     for idx, event in enumerate(visual_events):
         pose = _normalize_mascot_pose(event.get("mascot_pose"), "talking")
-        # CHANGED: .webm instead of .mp4 — real alpha channel, see lip_sync_service.py
         clip_name = f"talking_mascot_{idx}_{pose}.{MASCOT_CLIP_EXT}"
         clip_path = lesson_dir / clip_name
         pose_still = resolve_mascot_image(mascot_name, pose)
@@ -1117,8 +1269,6 @@ def produce_comic_lesson(
         })
         clip_paths.append(clip_path)
 
-    # CHANGED: no more concatenated talking_mascot.mp4 — see render_remotion()
-    # and the concat_mascot_clips() deprecation note above for why.
     _aggregate_gpu_status(clip_paths, lesson_dir)
 
     props = assemble_remotion_props(
@@ -1140,7 +1290,6 @@ def assemble_remotion_props(lesson_title, student_name, narration_timeline, visu
         "lesson_title": lesson_title,
         "student_name": student_name or "Rahul",
         "bg_image_url": visual_events[0]["bg_image_url"] if visual_events else "background.jpg",
-        # CHANGED: .webm placeholder extension to match the new pipeline.
         "talking_mascot_video_url": clips[0]["video_url"] if clips else f"talking_mascot.{MASCOT_CLIP_EXT}",
         "mascot_clips": clips,
         "narration_timeline": narration_timeline,
@@ -1154,12 +1303,27 @@ def build_storyboard_prompt(class_name, student_name):
     student = student_name or "Rahul"
     return f"""
     You are the Senior Spatial Storyboard Director for Kriti School's Drona Engine.
-    Analyze this PDF chapter and generate 2 to 3 micro-lessons for {class_name} students.
+    Analyze this ENTIRE PDF chapter and generate micro-lessons for {class_name} students.
 
-    STRICT TIME & WORD CAP MANDATE (2–3 MINUTE LESSONS):
-    - Each micro-lesson narration script MUST be between 300 and 350 words total (~2 to 2.5 minutes spoken).
-    - Break long chapter content across multiple lessons instead of overloading one lesson.
+    ADAPTIVE LESSON COUNT MANDATE (do not miss content for a big chapter):
+    - First, identify EVERY major topic, dynasty/ruler/kingdom, or named concept
+      covered anywhere in this chapter.
+    - Generate ONE micro-lesson per topic or tightly-related cluster of topics.
+      Use as many micro-lessons as necessary so that NO major topic is
+      compressed out or omitted — do not artificially limit yourself to a
+      small number of lessons if the chapter covers more distinct topics
+      than that would allow you to cover properly.
+    - Most chapters need 3 to 6 micro-lessons; a long, dense chapter may
+      legitimately need more. It is far better to produce one extra lesson
+      than to silently drop a named topic from the chapter.
     - OUTPUT ONLY a JSON array of storyboard objects.
+
+    STRICT TIME & WORD CAP MANDATE (3-4 MINUTE LESSONS):
+    - Each micro-lesson narration script MUST be between {NARRATION_WORDS_MIN}
+      and {NARRATION_WORDS_MAX} words total (~3 to 4 minutes spoken).
+    - Do not pad a lesson with filler to hit the word count — if a topic
+      genuinely needs fewer words, that's fine; prefer starting a new lesson
+      over stretching thin content or cramming unrelated topics together.
 
     STRICT ON-SCREEN TEXT LENGTH MANDATE (prevents mid-word truncation in the video UI):
     - Every "title" string MUST be {MAX_TITLE_CHARS} characters or fewer.
@@ -1169,6 +1333,21 @@ def build_storyboard_prompt(class_name, student_name):
       Never rely on the renderer to truncate text for you — write it short to begin with.
     - Chip/label-style short phrases MUST be {MAX_CHIP_CHARS} characters or fewer.
 
+    ADAPTIVE PANEL COUNT MANDATE (one fact per panel, not merged):
+    - Each micro-lesson should have between {MIN_PANELS_PER_LESSON} and
+      {MAX_PANELS_PER_LESSON} panels — one panel per major sub-point of that
+      lesson, not a fixed number.
+    - The FIRST panel of a lesson should introduce/hook the topic (use
+      "type": "intro").
+    - The LAST panel of a lesson should recap its key points (use
+      "type": "summary_badge").
+    - Panels in between should each cover ONE distinct fact, ruler, kingdom,
+      or concept. Use "type": "math_step" for sequential/step-by-step
+      content, or "type": "concept_card" for descriptive/factual content.
+      Do NOT merge multiple distinct facts into a single panel's "items"
+      list just to keep the panel count low.
+    - Set "mascot_pose" per panel to one of: talking, neutral, pointing, happy.
+
     CONTEXTUAL SDXL VISUAL BACKGROUNDS PER PHASE:
     - Each panel object MUST include its own "bg_prompt" string matching that specific beat concept.
     - Write photorealistic scene descriptions (e.g., "Photorealistic ancient Satavahana trading ship with two tall wooden masts on a blue ocean, 8k --no text --no people").
@@ -1177,45 +1356,102 @@ def build_storyboard_prompt(class_name, student_name):
     - Write a warm, friendly, storytelling teacher script speaking directly to the student ({student}).
     - Avoid dry textbook statements. Use engaging questions.
 
-    SPATIAL KEYFRAMES (EXACTLY 4 PANELS):
-    1. Phase 1 Intro: mascot at Bottom-Right {{"x": 550, "y": -250, "scale": 1.0}}, mascot_pose "talking".
-    2. Phase 2 Concept: mascot at Bottom-Right {{"x": 550, "y": -250, "scale": 1.0}}, mascot_pose "neutral"; card at Left {{"x": -350, "y": 0}}.
-    3. Phase 3 Worked Example: mascot at Bottom-Right {{"x": 550, "y": -250, "scale": 1.0}}, mascot_pose "pointing"; math card at Left {{"x": -350, "y": 0}}.
-    4. Phase 4 Recap: mascot at Bottom-Right {{"x": 550, "y": -250, "scale": 1.05}}, mascot_pose "happy", set glowing_badge true.
-
-    Return a valid JSON array matching:
+    Return a valid JSON array matching (panel count and lesson count are
+    EXAMPLES only — use as many of each as the chapter actually requires):
     {{
       "lesson_title": "string",
-      "narration_text": "string (300-350 words max)",
+      "narration_text": "string ({NARRATION_WORDS_MIN}-{NARRATION_WORDS_MAX} words)",
       "panels": [
         {{
           "phase": "Intro",
-          "bg_prompt": "Vivid SDXL scene description 1",
+          "type": "intro",
+          "bg_prompt": "Vivid SDXL scene description",
           "title": "Intro Title",
-          "items": ["Point 1", "Point 2"]
+          "items": ["Point 1", "Point 2"],
+          "mascot_pose": "talking"
         }},
         {{
           "phase": "Concept",
-          "bg_prompt": "Vivid SDXL scene description 2",
+          "type": "concept_card",
+          "bg_prompt": "Vivid SDXL scene description",
           "title": "Concept Title",
-          "items": ["Point 1", "Point 2"]
-        }},
-        {{
-          "phase": "Worked Example",
-          "bg_prompt": "Vivid SDXL scene description 3",
-          "title": "Example Title",
-          "items": ["Point 1", "Point 2"]
+          "items": ["Point 1", "Point 2"],
+          "mascot_pose": "pointing"
         }},
         {{
           "phase": "Recap",
-          "bg_prompt": "Vivid SDXL scene description 4",
+          "type": "summary_badge",
+          "bg_prompt": "Vivid SDXL scene description",
           "title": "Recap Title",
-          "items": ["Summary Point 1", "Summary Point 2"]
+          "items": ["Summary Point 1", "Summary Point 2"],
+          "mascot_pose": "happy"
         }}
       ],
       "initial_quiz": [...]
     }}
     """
+
+def _process_single_lesson(
+    lesson,
+    idx,
+    chapter_output_dir,
+    pdf_text,
+    mascot_name,
+    voice,
+    student_name,
+    force_regen,
+    provider,
+    label_suffix="",
+):
+    if not isinstance(lesson, dict):
+        return None
+
+    title, bg_prompt, narration_text, panels, initial_quiz = normalize_storyboard(lesson)
+    title = title or f"Micro-Lesson {idx + 1}{label_suffix}"
+
+    print(f"\n⚡ Processing Micro-Lesson {idx + 1}{label_suffix}: {title}")
+
+    lesson_dir = chapter_output_dir / f"Micro_Lesson_{idx + 1}"
+    lesson_dir.mkdir(parents=True, exist_ok=True)
+
+    storyboard_file = lesson_dir / "storyboard.json"
+    with open(storyboard_file, "w", encoding="utf-8") as f:
+        json.dump(lesson, f, indent=2)
+
+    full_quiz = expand_quiz_item_pool(
+        lesson_title=title,
+        pdf_text=pdf_text,
+        initial_quiz=initial_quiz,
+        provider=provider,
+    )
+    quiz_file = lesson_dir / "quiz.json"
+    with open(quiz_file, "w", encoding="utf-8") as f:
+        json.dump(full_quiz, f, indent=2)
+    print(f"   📝 Saved Quiz Bank: {quiz_file.name} ({len(full_quiz.get('item_pool', []))} randomized items ready!)")
+
+    if not narration_text:
+        print("   ❌ ERROR: No narration text found in AI storyboard.")
+        return None
+    if not panels:
+        print("   ❌ ERROR: No spatial panels found in AI storyboard.")
+        return None
+
+    narration_file = lesson_dir / "narration.txt"
+    with open(narration_file, "w", encoding="utf-8") as f:
+        f.write(narration_text)
+
+    produce_comic_lesson(
+        lesson_title=title,
+        narration_text=narration_text,
+        panels=panels,
+        lesson_dir=lesson_dir,
+        mascot_name=mascot_name,
+        voice=voice,
+        student_name=student_name,
+        force_regen=force_regen,
+    )
+    return narration_text
+
 
 def process_chapter_pdf(pdf_path, class_name, subject_name, force_regen=False, provider="anthropic", mascot_name="gyanu", student_name=None):
     chapter_name = pdf_path.stem
@@ -1239,54 +1475,52 @@ def process_chapter_pdf(pdf_path, class_name, subject_name, force_regen=False, p
     lessons = ensure_lesson_list(lessons)
     print(f"🧩 Chapter broken into {len(lessons)} comic micro-lessons.")
 
+    covered_narrations = []
     for idx, lesson in enumerate(lessons):
-        if not isinstance(lesson, dict):
-            continue
-
-        title, bg_prompt, narration_text, panels, initial_quiz = normalize_storyboard(lesson)
-        title = title or f"Micro-Lesson {idx + 1}"
-
-        print(f"\n⚡ [{chapter_name}] Processing Micro-Lesson {idx + 1}: {title}")
-
-        lesson_dir = chapter_output_dir / f"Micro_Lesson_{idx + 1}"
-        lesson_dir.mkdir(parents=True, exist_ok=True)
-
-        storyboard_file = lesson_dir / "storyboard.json"
-        with open(storyboard_file, "w", encoding="utf-8") as f:
-            json.dump(lesson, f, indent=2)
-
-        full_quiz = expand_quiz_item_pool(
-            lesson_title=title,
-            pdf_text=pdf_text,
-            initial_quiz=initial_quiz,
-            provider=provider
+        narration_text = _process_single_lesson(
+            lesson, idx, chapter_output_dir, pdf_text,
+            mascot_name, voice, student_name, force_regen, provider,
         )
-        quiz_file = lesson_dir / "quiz.json"
-        with open(quiz_file, "w", encoding="utf-8") as f:
-            json.dump(full_quiz, f, indent=2)
-        print(f"   📝 Saved Quiz Bank: {quiz_file.name} ({len(full_quiz.get('item_pool', []))} randomized items ready!)")
+        if narration_text:
+            covered_narrations.append(narration_text)
 
-        if not narration_text:
-            print("   ❌ ERROR: No narration text found in AI storyboard.")
-            continue
-        if not panels:
-            print("   ❌ ERROR: No spatial panels found in AI storyboard.")
-            continue
+    key_terms = _extract_key_terms(pdf_text)
+    combined_narration = " ".join(covered_narrations)
+    missing_terms = _find_missing_terms(key_terms, combined_narration)
 
-        narration_file = lesson_dir / "narration.txt"
-        with open(narration_file, "w", encoding="utf-8") as f:
-            f.write(narration_text)
+    if missing_terms:
+        preview = ", ".join(missing_terms[:10]) + ("..." if len(missing_terms) > 10 else "")
+        print(f"\n🔎 Coverage check: {len(missing_terms)} topic(s) from the source PDF "
+              f"were not found in any lesson's narration:")
+        print(f"   {preview}")
+        print("   🩹 Requesting one self-heal micro-lesson to cover the gap (single extra API call)...")
+        gap_lesson = None
+        try:
+            gap_lesson = generate_gap_fill_lesson(
+                pdf_text=pdf_text,
+                existing_lessons=lessons,
+                missing_terms=missing_terms,
+                provider=provider,
+                class_name=class_name,
+                student_name=student_name,
+            )
+        except Exception as exc:
+            print(f"   ⚠️ Gap-fill generation failed: {exc}. Proceeding without a patch lesson.")
 
-        produce_comic_lesson(
-            lesson_title=title,
-            narration_text=narration_text,
-            panels=panels,
-            lesson_dir=lesson_dir,
-            mascot_name=mascot_name,
-            voice=voice,
-            student_name=student_name,
-            force_regen=force_regen,
-        )
+        if gap_lesson:
+            gap_idx = len(lessons)
+            narration_text = _process_single_lesson(
+                gap_lesson, gap_idx, chapter_output_dir, pdf_text,
+                mascot_name, voice, student_name, force_regen, provider,
+                label_suffix=" (Coverage Patch)",
+            )
+            if narration_text:
+                lessons.append(gap_lesson)
+                print(f"   ✅ Coverage patch lesson added as Micro_Lesson_{gap_idx + 1}.")
+            else:
+                print("   ⚠️ Coverage patch lesson was generated but failed to process.")
+    else:
+        print("\n✅ Coverage check passed — heuristic scan found no obviously-missing named topics.")
 
 # ------------------------------------------------------------------------------
 # 7. RECURSIVE BATCH ORCHESTRATION
