@@ -4,28 +4,29 @@ export const defaultComicLessonProps: ComicLessonProps = {
   lesson_title: 'Place Value: Building 3,456',
   student_name: 'Rahul',
   bg_image_url: 'backgrounds/classroom.jpg',
-  talking_mascot_video_url: 'mascot.mp4',
+  // CHANGED: .webm — mascot clips now carry real alpha (see lip_sync_service.py)
+  talking_mascot_video_url: 'mascot.webm',
   mascot_clips: [
     {
-      video_url: 'mascot.mp4',
+      video_url: 'mascot.webm',
       start_time: 0,
       end_time: 5,
       pose: 'talking',
     },
     {
-      video_url: 'mascot.mp4',
+      video_url: 'mascot.webm',
       start_time: 5,
       end_time: 16.5,
       pose: 'neutral',
     },
     {
-      video_url: 'mascot.mp4',
+      video_url: 'mascot.webm',
       start_time: 16.5,
       end_time: 22.5,
       pose: 'pointing',
     },
     {
-      video_url: 'mascot.mp4',
+      video_url: 'mascot.webm',
       start_time: 22.5,
       end_time: 27.5,
       pose: 'happy',
@@ -72,6 +73,10 @@ export const defaultComicLessonProps: ComicLessonProps = {
       mascot_position: {x: 960, y: 440, scale: 1.05},
       card_position: {x: 960, y: 260},
       mascot_pose: 'talking',
+      // CHANGED: per-event background — this is now actually read by
+      // ComicLesson.tsx instead of being ignored in favor of the top-level
+      // bg_image_url for the whole lesson.
+      bg_image_url: 'backgrounds/classroom.jpg',
     },
     {
       type: 'concept_card',
@@ -82,6 +87,7 @@ export const defaultComicLessonProps: ComicLessonProps = {
       mascot_position: {x: 460, y: 740, scale: 0.98},
       card_position: {x: 1160, y: 540},
       mascot_pose: 'neutral',
+      bg_image_url: 'backgrounds/classroom.jpg',
     },
     {
       type: 'concept_card',
@@ -92,6 +98,7 @@ export const defaultComicLessonProps: ComicLessonProps = {
       mascot_position: {x: 460, y: 740, scale: 0.95},
       card_position: {x: 1160, y: 540},
       mascot_pose: 'neutral',
+      bg_image_url: 'backgrounds/classroom.jpg',
     },
     {
       type: 'math_step',
@@ -108,6 +115,7 @@ export const defaultComicLessonProps: ComicLessonProps = {
       mascot_position: {x: 1460, y: 740, scale: 0.92},
       card_position: {x: 760, y: 540},
       mascot_pose: 'pointing',
+      bg_image_url: 'backgrounds/classroom.jpg',
     },
     {
       type: 'summary_badge',
@@ -123,6 +131,7 @@ export const defaultComicLessonProps: ComicLessonProps = {
       card_position: {x: 960, y: 420},
       glowing_badge: true,
       mascot_pose: 'happy',
+      bg_image_url: 'backgrounds/classroom.jpg',
     },
   ],
 };

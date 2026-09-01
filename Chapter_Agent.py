@@ -1,6 +1,29 @@
 # ==============================================================================
 # Master Production Engine: Spatial Storyboard + Dynamic SDXL Story Backgrounds
 # Place in: E:\Kriti\chapter_agent.py (or Chapter_Agent.py)
+#
+# CHANGED (transparency + honesty pass — see lip_sync_service.py for the
+# matching core changes):
+#   1. Mascot clips are now published as .webm (real alpha) instead of .mp4.
+#   2. The old "concatenate all pose clips into one talking_mascot.mp4" step
+#      re-encoded through libx264, which silently destroyed the alpha
+#      channel every single time regardless of what lip_sync_service
+#      produced. ComicLesson.tsx already supports a `mascot_clips` array
+#      played as separate Sequences, so that concatenation was never
+#      actually necessary — it's now skipped. `concat_mascot_clips` is left
+#      in place but unused/deprecated in case anything else in your repo
+#      calls it directly; do not use it for mascot clips going forward.
+#   3. After generating a lesson's mascot clips, the per-clip
+#      `<clip>.webm.status.json` sidecars written by lip_sync_service are
+#      aggregated into one `gpu_status.json` per lesson, so a degraded
+#      (CPU-fallback) render is visible in the output folder itself, not
+#      just in scrollback logs.
+#   4. New `_validate_sfx_assets()` warns loudly (does not fail the render)
+#      if pop/swoosh/chime.mp3 are near-silent — catches the setup script's
+#      1-second silent fallback quietly shipping in a "finished" video.
+#   5. `build_storyboard_prompt()` now explicitly caps title/item/chip label
+#      length, targeting the mid-word truncation bug at the content-
+#      generation source rather than only patching it in the UI layer.
 # ==============================================================================
 import os
 import sys
@@ -118,6 +141,9 @@ TTS_TICKS_PER_SECOND = 10_000_000
 CANVAS_WIDTH = 1920
 CANVAS_HEIGHT = 1080
 
+# CHANGED: mascot clips now carry real alpha as .webm — see lip_sync_service.py
+MASCOT_CLIP_EXT = "webm"
+
 SPATIAL_PHASES = (
     {
         "phase": "Intro",
@@ -166,6 +192,12 @@ PHASE_TO_EVENT_TYPE = {
     "summary_badge": "summary_badge",
 }
 VALID_EVENT_TYPES = {"intro", "concept_card", "math_step", "summary_badge"}
+
+# CHANGED: length caps that feed straight into the storyboard prompt, aimed
+# at stopping chip/label text from ever being long enough to need truncating.
+MAX_TITLE_CHARS = 42
+MAX_ITEM_CHARS = 30
+MAX_CHIP_CHARS = 20
 
 REQUIRED_TOOLS = ["ffmpeg", "ffprobe", "npx"]
 missing_tools = [tool for tool in REQUIRED_TOOLS if shutil.which(tool) is None]
@@ -442,6 +474,10 @@ def panels_to_visual_events_precise(panels, narration_timeline, lesson_dir):
             ),
             "card_position": world_to_canvas(_as_xy(panel.get("card_position"), SPATIAL_PHASES[idx]["card"])),
             "glowing_badge": bool(panel.get("glowing_badge", SPATIAL_PHASES[idx]["glowing_badge"])),
+            # NOTE: this per-event bg_image_url already existed here — it was
+            # simply never read on the Remotion side. See schema.ts /
+            # ComicLesson.tsx changes: the video now actually varies its
+            # background per beat instead of using only the top-level image.
             "bg_image_url": bg_filename
         })
     return events
@@ -835,6 +871,13 @@ def extract_audio_segment(src_audio, dest, start_time, end_time):
     return dest
 
 def concat_mascot_clips(clip_paths, output_path):
+    """DEPRECATED for mascot clips: re-encoding through libx264 here destroys
+    any alpha channel produced by lip_sync_service.py. ComicLesson.tsx already
+    plays `mascot_clips` as separate per-pose Sequences, so concatenation is
+    unnecessary for the mascot pipeline — kept only in case another part of
+    your codebase depends on this exact function signature. Do not wire this
+    back into produce_comic_lesson() for mascot clips.
+    """
     output_path = Path(output_path)
     list_file = output_path.parent / "mascot_concat.txt"
     with open(list_file, "w", encoding="utf-8") as handle:
@@ -859,17 +902,82 @@ def concat_mascot_clips(clip_paths, output_path):
         raise RuntimeError(f"ffmpeg mascot concat failed: {(result.stderr or '')[-400:]}")
     return output_path
 
-def assemble_remotion_props(lesson_title, student_name, narration_timeline, visual_events, mascot_clips=None):
-    clips = mascot_clips or []
-    return {
-        "lesson_title": lesson_title,
-        "student_name": student_name or "Rahul",
-        "bg_image_url": visual_events[0]["bg_image_url"] if visual_events else "background.jpg",
-        "talking_mascot_video_url": clips[0]["video_url"] if clips else "talking_mascot.mp4",
-        "mascot_clips": clips,
-        "narration_timeline": narration_timeline,
-        "visual_events": visual_events,
-    }
+
+def _is_effectively_silent(path: Path, floor_db: float = -50.0) -> bool:
+    """CHANGED — new: detects the 1-second silent SFX fallback (or any other
+    accidentally-silent audio asset) via ffmpeg's volumedetect filter, so a
+    "finished" render can't quietly ship with dead sound effects.
+    """
+    path = Path(path)
+    if not path.is_file():
+        return True
+    cmd = [
+        "ffmpeg", "-i", str(path),
+        "-af", "volumedetect",
+        "-f", "null", "-",
+    ]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+    match = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?)\s*dB", result.stderr or "")
+    if not match:
+        # Could not measure — don't block the render over an inconclusive probe.
+        return False
+    return float(match.group(1)) <= floor_db
+
+
+def _validate_sfx_assets():
+    """CHANGED — new: warns (does not raise) if any of the expected SFX files
+    are missing or near-silent, e.g. the setup script's 1-second silent
+    fallback. Call once near the start of a chapter run.
+    """
+    sfx_dir = REMOTION_PUBLIC_DIR / "sfx"
+    for name in ("pop.mp3", "swoosh.mp3", "chime.mp3"):
+        candidate = sfx_dir / name
+        if not candidate.is_file():
+            print(f"   ⚠️ SFX missing: {candidate} — cards/beats using it will render silent.")
+            continue
+        try:
+            if _is_effectively_silent(candidate):
+                print(
+                    f"   ⚠️ SFX '{name}' is near-silent — this looks like the setup "
+                    f"script's placeholder fallback, not a real sound effect. "
+                    f"Re-run remotion/scripts/generate-sfx.bat (or the ffmpeg synth "
+                    f"commands in it) to produce real tones before this render is final."
+                )
+        except Exception as exc:
+            print(f"   ⚠️ Could not probe SFX '{name}' for silence: {exc}")
+
+
+def _aggregate_gpu_status(clip_paths, lesson_dir):
+    """CHANGED — new: reads the per-clip `<clip>.webm.status.json` sidecars
+    written by lip_sync_service.generate_talking_mascot() and rolls them up
+    into one gpu_status.json per lesson, so a CPU-fallback (motionless)
+    render is visible in the output folder itself.
+    """
+    statuses = []
+    any_fallback = False
+    for clip_path in clip_paths:
+        sidecar = Path(clip_path).with_suffix(Path(clip_path).suffix + ".status.json")
+        if sidecar.is_file():
+            try:
+                data = json.loads(sidecar.read_text(encoding="utf-8"))
+            except Exception:
+                data = {"error": "could not parse status sidecar"}
+        else:
+            data = {"error": "no status sidecar found"}
+        data["clip"] = Path(clip_path).name
+        if data.get("used_fallback"):
+            any_fallback = True
+        statuses.append(data)
+
+    summary = {"any_cpu_fallback_used": any_fallback, "clips": statuses}
+    out_path = Path(lesson_dir) / "gpu_status.json"
+    out_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    if any_fallback:
+        print(
+            f"   ⚠️ At least one mascot clip in this lesson used the CPU bounce "
+            f"fallback (no GPU lip movement). See {out_path.name} for details."
+        )
+    return summary
 
 def render_remotion(props, lesson_dir, output_path):
     REMOTION_PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -882,6 +990,10 @@ def render_remotion(props, lesson_dir, output_path):
             if bg_src.is_file():
                 shutil.copy2(bg_src, REMOTION_PUBLIC_DIR / bg_name)
 
+    # CHANGED: publish each mascot clip individually as-is (.webm, alpha
+    # intact). No more concatenation into a single talking_mascot.mp4 — that
+    # step used to re-encode through libx264 and silently drop the alpha
+    # channel every time, regardless of what lip_sync_service produced.
     published = []
     for clip in props.get("mascot_clips") or []:
         src = lesson_dir / Path(clip["video_url"]).name
@@ -892,14 +1004,11 @@ def render_remotion(props, lesson_dir, output_path):
         clip["video_url"] = dest_name
         published.append(dest_name)
 
-    combined = lesson_dir / "talking_mascot.mp4"
-    if combined.is_file():
-        shutil.copy2(combined, REMOTION_PUBLIC_DIR / "talking_mascot.mp4")
-        props["talking_mascot_video_url"] = "talking_mascot.mp4"
-    elif published:
-        props["talking_mascot_video_url"] = published[0]
-    else:
-        raise FileNotFoundError(f"Talking mascot MP4 not found at {combined}")
+    if not published:
+        raise FileNotFoundError("No mascot clips were generated for this lesson.")
+    # Schema requires a top-level talking_mascot_video_url string; ComicLesson.tsx
+    # only actually uses it when `mascot_clips` is empty, so this is a safe fallback.
+    props["talking_mascot_video_url"] = published[0]
 
     props_file = lesson_dir / "props.json"
     with open(props_file, "w", encoding="utf-8") as f:
@@ -966,12 +1075,14 @@ def produce_comic_lesson(
     mascot_dir = resolve_mascot_pose_dir(mascot_name)
     print(f"   🗂️ Pose directory: {mascot_dir}")
     _log_gpu_status()
+    _validate_sfx_assets()
 
     mascot_clips = []
     clip_paths = []
     for idx, event in enumerate(visual_events):
         pose = _normalize_mascot_pose(event.get("mascot_pose"), "talking")
-        clip_name = f"talking_mascot_{idx}_{pose}.mp4"
+        # CHANGED: .webm instead of .mp4 — real alpha channel, see lip_sync_service.py
+        clip_name = f"talking_mascot_{idx}_{pose}.{MASCOT_CLIP_EXT}"
         clip_path = lesson_dir / clip_name
         pose_still = resolve_mascot_image(mascot_name, pose)
         reuse_clip = (
@@ -1006,18 +1117,9 @@ def produce_comic_lesson(
         })
         clip_paths.append(clip_path)
 
-    talking_mascot_path = lesson_dir / "talking_mascot.mp4"
-    reuse_combined = (
-        not force_regen
-        and talking_mascot_path.is_file()
-        and talking_mascot_path.stat().st_size > 10_000
-        and all(p.is_file() for p in clip_paths)
-    )
-    if reuse_combined:
-        print(f"   ♻️ Reusing concatenated talking_mascot.mp4")
-    elif clip_paths:
-        print("   🔗 Combining pose clips → talking_mascot.mp4")
-        concat_mascot_clips(clip_paths, talking_mascot_path)
+    # CHANGED: no more concatenated talking_mascot.mp4 — see render_remotion()
+    # and the concat_mascot_clips() deprecation note above for why.
+    _aggregate_gpu_status(clip_paths, lesson_dir)
 
     props = assemble_remotion_props(
         lesson_title=lesson_title,
@@ -1030,6 +1132,20 @@ def produce_comic_lesson(
     render_remotion(props, lesson_dir, output_path)
     print(f"   ✨ Comic lesson ready ({output_path.name})")
     return output_path
+
+
+def assemble_remotion_props(lesson_title, student_name, narration_timeline, visual_events, mascot_clips=None):
+    clips = mascot_clips or []
+    return {
+        "lesson_title": lesson_title,
+        "student_name": student_name or "Rahul",
+        "bg_image_url": visual_events[0]["bg_image_url"] if visual_events else "background.jpg",
+        # CHANGED: .webm placeholder extension to match the new pipeline.
+        "talking_mascot_video_url": clips[0]["video_url"] if clips else f"talking_mascot.{MASCOT_CLIP_EXT}",
+        "mascot_clips": clips,
+        "narration_timeline": narration_timeline,
+        "visual_events": visual_events,
+    }
 
 # ------------------------------------------------------------------------------
 # 6. CHAPTER PROCESSING ENGINE
@@ -1044,6 +1160,14 @@ def build_storyboard_prompt(class_name, student_name):
     - Each micro-lesson narration script MUST be between 300 and 350 words total (~2 to 2.5 minutes spoken).
     - Break long chapter content across multiple lessons instead of overloading one lesson.
     - OUTPUT ONLY a JSON array of storyboard objects.
+
+    STRICT ON-SCREEN TEXT LENGTH MANDATE (prevents mid-word truncation in the video UI):
+    - Every "title" string MUST be {MAX_TITLE_CHARS} characters or fewer.
+    - Every string inside "items" MUST be {MAX_ITEM_CHARS} characters or fewer.
+    - If a fact needs more room than that, shorten it to its key phrase (e.g.
+      "Warfare: military conquest of rival territory" -> "Warfare: military conquest").
+      Never rely on the renderer to truncate text for you — write it short to begin with.
+    - Chip/label-style short phrases MUST be {MAX_CHIP_CHARS} characters or fewer.
 
     CONTEXTUAL SDXL VISUAL BACKGROUNDS PER PHASE:
     - Each panel object MUST include its own "bg_prompt" string matching that specific beat concept.

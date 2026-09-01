@@ -34,39 +34,56 @@ export type CardBox = {
   left: number;
   top: number;
   width: number;
-  height: number;
+  /**
+   * CHANGED: this used to be a forced `height` that every card was stretched
+   * (or, more often, left mostly empty inside) to fill regardless of how
+   * much content it actually had — e.g. a 3-bullet intro card in a 620px-tall
+   * box left ~400px of dead space below the last bullet. It's now a ceiling
+   * (`maxHeight`) the card is allowed to grow up to; actual rendered height
+   * comes from its content via CSS (see FloatingMathCard.tsx), and long
+   * cards (like the 5-step summary badge) still can't blow past the
+   * CARDS_ZONE bounds.
+   */
+  maxHeight: number;
 };
 
-export const CARD_SIZE: Record<VisualEventType, {width: number; height: number}> = {
-  intro: {width: CARDS_ZONE.width, height: 380},
-  concept_card: {width: CARDS_ZONE.width, height: 620},
-  math_step: {width: CARDS_ZONE.width, height: 680},
-  summary_badge: {width: CARDS_ZONE.width, height: 720},
+// CHANGED: renamed conceptually from "the height this card IS" to
+// "the tallest this card type is ALLOWED to get" — see CardBox.maxHeight.
+export const CARD_MAX_HEIGHT: Record<VisualEventType, number> = {
+  intro: 380,
+  concept_card: 620,
+  math_step: 680,
+  summary_badge: 720,
 };
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
 
-/** Cards live in the left zone; coordinates are local to CARDS_ZONE. */
+/**
+ * Cards live in the left zone; coordinates are local to CARDS_ZONE.
+ * CHANGED: cards other than `intro` used to be vertically centered based on
+ * their *forced* fixed height, which is exactly what produced the visible
+ * empty space under short content — a short card would still claim, say,
+ * 620px of vertical room and get centered within that claim. Now that cards
+ * size to content, they anchor near the top of the zone (a fixed, modest
+ * offset) so a 2-bullet card and a 5-bullet card both start reading from
+ * roughly the same place instead of jumping to different vertical centers.
+ */
 export const placeFloatingCard = (
   type: VisualEventType,
   _mascot?: MascotPosition | null,
   _cardPosition?: {x: number; y: number} | null,
 ): CardBox => {
-  const preferred = CARD_SIZE[type];
-  const width = Math.min(preferred.width, CARDS_ZONE.width);
-  const height = Math.min(preferred.height, CARDS_ZONE.height);
+  const maxHeight = Math.min(CARD_MAX_HEIGHT[type], CARDS_ZONE.height);
+  const width = Math.min(CARDS_ZONE.width, CARDS_ZONE.width);
+  const topOffset = type === 'intro' ? 0 : 48;
   const pad = 8;
 
   return {
     left: 0,
-    top: clamp(
-      type === 'intro' ? 0 : (CARDS_ZONE.height - height) / 2,
-      pad,
-      CARDS_ZONE.height - height - pad,
-    ),
+    top: clamp(topOffset, pad, CARDS_ZONE.height - pad),
     width,
-    height,
+    maxHeight,
   };
 };
 

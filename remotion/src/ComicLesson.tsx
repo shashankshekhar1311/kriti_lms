@@ -49,7 +49,42 @@ export const ComicLesson: React.FC<ComicLessonProps> = ({
 
   return (
     <FullCanvasStage lessonTitle={lesson_title} studentName={student_name}>
-      <DynamicBackground bgImageUrl={bg_image_url} />
+      {/*
+        CHANGED: the background used to be one <DynamicBackground> fed only
+        the top-level `bg_image_url`, so every micro-lesson sat in the same
+        still image for its entire 2-3 minutes regardless of how many beats
+        it had. Chapter_Agent.py has always generated one SDXL image per
+        visual event (`event.bg_image_url`, see panels_to_visual_events_precise
+        in Chapter_Agent.py) — it just never made it into the schema or here.
+        Each beat now gets its own Sequence-scoped background, falling back
+        to the lesson-level image if a given event doesn't have its own.
+
+        NOTE: this is a hard cut between beats, not a cross-dissolve — the
+        existing DynamicBackground component doesn't currently expose an
+        entry/exit fade hook to blend across a Sequence boundary. Worth a
+        follow-up pass if the hard cut reads as too abrupt once you see it
+        in a real render; flagging it now rather than silently shipping a
+        half-finished crossfade.
+      */}
+      {visual_events.length > 0 ? (
+        visual_events.map((event, index) => {
+          const window = eventWindow(event, fps);
+          return (
+            <Sequence
+              key={`bg-${event.type}-${event.start_time}-${index}`}
+              from={window.from}
+              durationInFrames={window.durationInFrames}
+              name={`Background: ${event.title}`}
+              layout="none"
+            >
+              <DynamicBackground bgImageUrl={event.bg_image_url ?? bg_image_url} />
+            </Sequence>
+          );
+        })
+      ) : (
+        <DynamicBackground bgImageUrl={bg_image_url} />
+      )}
+
       <ComicAudioFx triggers={sfxTriggers} />
 
       <div style={cardsZoneStyle}>

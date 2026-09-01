@@ -9,10 +9,33 @@ Fallback (CPU / no GPU)
     scale bounce timed to the audio, exported as H.264 MP4.
 
 No Hedra / Replicate / paid SaaS keys are used.
+
+# CHANGED (transparency + GPU-honesty pass):
+# 1. Every stage that used to bake a solid slate background (#0F172A) into
+#    the mascot frame now bakes a pure chroma-key green instead. A new final
+#    step, `_finalize_alpha_video`, keys that green out and encodes a real
+#    alpha-channel WebM (VP9). This is the actual fix for the mascot showing
+#    up inside a visible hard-edged box: H.264 MP4 has no alpha channel, so
+#    no amount of CSS `background: transparent` around it could ever have
+#    worked. Every code path (Wav2Lip, LivePortrait, CPU bounce fallback)
+#    now goes through the same finalize step, so all of them end up
+#    genuinely transparent, not just the "happy path".
+# 2. New `LIP_SYNC_REQUIRE_GPU` env flag. When set truthy, a missing/failed
+#    GPU now raises loudly instead of silently producing a frozen CPU-bounce
+#    clip that *looks* finished but has zero lip movement. This is what
+#    actually happened in the sample renders you shared — CUDA wasn't
+#    available, so it fell back invisibly.
+# 3. Every successful/failed generation writes a small `<clip>.status.json`
+#    sidecar (engine used, cuda_available, whether it hit the fallback) so a
+#    silently-degraded render is auditable after the fact, not just visible
+#    in scrollback logs you may not have kept.
+# 4. Renamed `_is_valid_mp4` -> `_is_valid_video` since the deliverable is
+#    now WebM, not MP4 (ffprobe codec check works on either container).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -63,7 +86,15 @@ FALLBACK_FPS = 25
 FALLBACK_SIZE = 720
 BOUNCE_HZ = 2.2
 BOUNCE_AMP = 0.04
-CANVAS_BG = (15, 23, 42)  # slate-900
+
+# CHANGED: this used to be CANVAS_BG = (15, 23, 42) (slate) baked directly
+# into every rasterized/fallback frame. Slate is close-but-not-identical to
+# the real gradient background behind it in Remotion, which is exactly what
+# produced the visible seam/box. It's now a pure chroma-key green, keyed out
+# in `_finalize_alpha_video` before the clip ever reaches Remotion.
+CHROMA_KEY_RGB = (0, 255, 0)
+CHROMA_KEY_HEX = "#00FF00"
+
 RASTER_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 PHOTO_AVATAR_NAMES = ("real_avatar.jpg", "real_avatar.png", "real_avatar.jpeg")
 POSE_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".svg")
@@ -77,6 +108,10 @@ POSE_FALLBACK_CHAIN = {
 MASCOT_ASSETS_DIR = BASE_DIR / "assets" / "mascots"
 GPU_INFERENCE_TIMEOUT_S = int(os.getenv("LIP_SYNC_GPU_TIMEOUT", "900"))
 PREFERRED_ENGINE = (os.getenv("LIP_SYNC_ENGINE") or "wav2lip").strip().lower()
+
+# CHANGED: new flag. Set LIP_SYNC_REQUIRE_GPU=1 to make a missing/failed GPU
+# a hard error instead of a silent, motionless CPU-bounce render.
+REQUIRE_GPU = (os.getenv("LIP_SYNC_REQUIRE_GPU", "") or "").strip().lower() in {"1", "true", "yes"}
 
 
 # ------------------------------------------------------------------------------
@@ -157,21 +192,27 @@ def resolve_pose_image(
 def generate_talking_mascot(
     mascot_image_path: Path,
     audio_mp3_path: Path,
-    output_mp4_path: Path,
+    output_video_path: Path,
     pose_type: str = "talking",
     mascot_name: Optional[str] = None,
 ) -> Path:
-    """Build a talking-mascot MP4 from a pose still and TTS audio.
+    """Build a talking-mascot clip from a pose still and TTS audio.
 
-    ``resolve_pose_image`` prefers ``real_avatar.jpg`` / ``real_avatar.png`` in
-    the mascot folder, then pose PNG/JPG stills, then SVG. Photographic JPG/PNG
-    frames are passed directly to Wav2Lip / LivePortrait (no SVG rasterization).
-    On CUDA, runs local Wav2Lip (or LivePortrait). Without a GPU, falls back to
-    a MoviePy/FFmpeg sine-wave bounce.
+    ``output_video_path`` should end in ``.webm`` — the deliverable now
+    carries a real alpha channel (VP9). Passing a ``.mp4`` path still works
+    mechanically but you will get an opaque chroma-green rectangle instead
+    of transparency, since MP4/H.264 cannot hold alpha.
+
+    On CUDA, runs local Wav2Lip (or LivePortrait) against a chroma-keyed
+    source frame, then keys the flat background back out into real alpha.
+    Without a GPU, falls back to a MoviePy/FFmpeg sine-wave bounce of the
+    same chroma-keyed still — unless ``LIP_SYNC_REQUIRE_GPU`` is set, in
+    which case a missing/failing GPU raises instead of silently degrading.
     """
     mascot_image_path = Path(mascot_image_path)
     audio_mp3_path = Path(audio_mp3_path)
-    output_mp4_path = Path(output_mp4_path)
+    output_video_path = Path(output_video_path)
+    status: dict = {"engine": None, "cuda_available": False, "used_fallback": False}
 
     pose_image = resolve_pose_image(
         mascot_image_path=mascot_image_path,
@@ -181,33 +222,85 @@ def generate_talking_mascot(
     if not audio_mp3_path.is_file():
         raise FileNotFoundError(f"TTS audio not found: {audio_mp3_path}")
 
-    output_mp4_path.parent.mkdir(parents=True, exist_ok=True)
+    output_video_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Lip-sync pose=%s image=%s", pose_type, pose_image.name)
+    # `bounce_path` is now rasterized against CHROMA_KEY, not slate.
     bounce_path = _ensure_raster_image(pose_image)
 
-    if _cuda_available():
-        engines = _gpu_engine_order()
-        for name in engines:
-            try:
-                logger.info("GPU engine: %s on cuda:0", name)
-                face_source = _prepare_face_frame(pose_image, engine=name)
-                if name == "wav2lip":
-                    result = _generate_via_wav2lip(face_source, audio_mp3_path, output_mp4_path)
-                elif name == "liveportrait":
-                    result = _generate_via_liveportrait(face_source, audio_mp3_path, output_mp4_path)
-                else:
-                    continue
-                if _is_valid_mp4(result):
-                    logger.info("%s succeeded -> %s", name, result)
-                    return result
-                logger.warning("%s produced an invalid MP4; trying next engine", name)
-            except Exception as exc:
-                logger.warning("%s failed: %s", name, exc)
-        logger.warning("All GPU engines failed; falling back to CPU bounce")
-    else:
-        logger.info("CUDA unavailable (torch.cuda.is_available()=False); using CPU bounce")
+    cuda_ok = _cuda_available()
+    status["cuda_available"] = cuda_ok
 
-    return _generate_local_fallback(bounce_path, audio_mp3_path, output_mp4_path)
+    if not cuda_ok and REQUIRE_GPU:
+        _write_status_sidecar(output_video_path, status | {"error": "CUDA unavailable and LIP_SYNC_REQUIRE_GPU is set"})
+        raise RuntimeError(
+            "LIP_SYNC_REQUIRE_GPU is set but no CUDA device is available. "
+            "Refusing to silently fall back to the motionless CPU bounce. "
+            "Enable a GPU accelerator for this session, or unset LIP_SYNC_REQUIRE_GPU."
+        )
+
+    raw_opaque_path: Optional[Path] = None
+    try:
+        if cuda_ok:
+            engines = _gpu_engine_order()
+            for name in engines:
+                try:
+                    logger.info("GPU engine: %s on cuda:0", name)
+                    face_source = _prepare_face_frame(pose_image, engine=name)
+                    tmp_raw = Path(tempfile.mktemp(suffix=".mp4", dir=str(TEMP_DIR)))
+                    if name == "wav2lip":
+                        result = _generate_via_wav2lip(face_source, audio_mp3_path, tmp_raw)
+                    elif name == "liveportrait":
+                        result = _generate_via_liveportrait(face_source, audio_mp3_path, tmp_raw)
+                    else:
+                        continue
+                    if _is_valid_video(result):
+                        logger.info("%s succeeded -> %s", name, result)
+                        raw_opaque_path = result
+                        status["engine"] = name
+                        break
+                    logger.warning("%s produced an invalid clip; trying next engine", name)
+                except Exception as exc:
+                    logger.warning("%s failed: %s", name, exc)
+            if raw_opaque_path is None:
+                if REQUIRE_GPU:
+                    _write_status_sidecar(output_video_path, status | {"error": "all GPU engines failed"})
+                    raise RuntimeError(
+                        "LIP_SYNC_REQUIRE_GPU is set and every GPU engine failed. "
+                        "Refusing to fall back to the CPU bounce. Check the engine logs above."
+                    )
+                logger.warning("All GPU engines failed; falling back to CPU bounce")
+
+        if raw_opaque_path is None:
+            if not cuda_ok:
+                logger.info("CUDA unavailable (torch.cuda.is_available()=False); using CPU bounce")
+            raw_opaque_path = Path(tempfile.mktemp(suffix=".mp4", dir=str(TEMP_DIR)))
+            _generate_local_fallback(bounce_path, audio_mp3_path, raw_opaque_path)
+            status["engine"] = "cpu_bounce"
+            status["used_fallback"] = True
+
+        # CHANGED: unconditional final step for every engine — key the flat
+        # chroma background out and encode real alpha, so transparency is
+        # never engine-dependent.
+        _finalize_alpha_video(raw_opaque_path, output_video_path)
+        if not _is_valid_video(output_video_path):
+            raise RuntimeError(f"Alpha finalize step did not produce a valid clip at {output_video_path}")
+
+        _write_status_sidecar(output_video_path, status)
+        return output_video_path
+    finally:
+        if raw_opaque_path is not None and raw_opaque_path.exists() and raw_opaque_path != output_video_path:
+            try:
+                raw_opaque_path.unlink()
+            except OSError:
+                pass
+
+
+def _write_status_sidecar(video_path: Path, status: dict) -> None:
+    sidecar = video_path.with_suffix(video_path.suffix + ".status.json")
+    try:
+        sidecar.write_text(json.dumps(status, indent=2), encoding="utf-8")
+    except OSError:
+        pass
 
 
 # ------------------------------------------------------------------------------
@@ -249,7 +342,6 @@ def _generate_via_wav2lip(image_path: Path, audio_path: Path, output_path: Path)
     work = Path(tempfile.mkdtemp(prefix="wav2lip_", dir=str(TEMP_DIR)))
     try:
         raw_out = work / "result_raw.mp4"
-        # Wav2Lip accepts a static face image when --fps is set. Removed "--face_det_batch_size", "8",
         cmd = [
             sys.executable,
             str(root / "inference.py"),
@@ -265,7 +357,6 @@ def _generate_via_wav2lip(image_path: Path, audio_path: Path, output_path: Path)
         logger.info("Wav2Lip inference: %s", " ".join(cmd[:6]) + " ...")
         env = os.environ.copy()
         env["CUDA_VISIBLE_DEVICES"] = env.get("CUDA_VISIBLE_DEVICES", "0")
-        # Prefer CUDA device 0 inside the process.
         env["PYTORCH_CUDA_ALLOC_CONF"] = env.get("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
 
         proc = subprocess.run(
@@ -365,7 +456,6 @@ def _generate_via_liveportrait(image_path: Path, audio_path: Path, output_path: 
             "--output", str(raw_out),
             "--device", "cuda:0",
         ]
-        # Alternate flag names used by some forks.
         alt_cmds = [
             cmd,
             [
@@ -411,8 +501,6 @@ def _ensure_liveportrait_repo() -> Path:
         logger.info("Using LivePortrait at %s", LIVEPORTRAIT_DIR)
         return LIVEPORTRAIT_DIR
 
-    # Do not auto-clone the full LivePortrait stack by default (large weights).
-    # Only clone when explicitly requested.
     if os.getenv("LIP_SYNC_AUTO_CLONE_LIVEPORTRAIT", "").strip() not in {"1", "true", "yes"}:
         raise RuntimeError(
             f"LivePortrait not found at {LIVEPORTRAIT_DIR}. "
@@ -458,7 +546,7 @@ def _generate_local_fallback(image_path: Path, audio_path: Path, output_path: Pa
 
     try:
         _render_bounce_moviepy(image_path, audio_path, output_path, duration)
-        if _is_valid_mp4(output_path):
+        if _is_valid_video(output_path):
             logger.info("MoviePy fallback wrote %s", output_path)
             return output_path
         logger.warning("MoviePy produced an invalid file; trying FFmpeg")
@@ -466,8 +554,8 @@ def _generate_local_fallback(image_path: Path, audio_path: Path, output_path: Pa
         logger.warning("MoviePy fallback unavailable (%s); trying FFmpeg", exc)
 
     _render_bounce_ffmpeg(image_path, audio_path, output_path, duration)
-    if not _is_valid_mp4(output_path):
-        raise RuntimeError(f"Local fallback failed to write a valid MP4 at {output_path}")
+    if not _is_valid_video(output_path):
+        raise RuntimeError(f"Local fallback failed to write a valid clip at {output_path}")
     logger.info("FFmpeg fallback wrote %s", output_path)
     return output_path
 
@@ -495,7 +583,9 @@ def _render_bounce_moviepy(image_path: Path, audio_path: Path, output_path: Path
         return clip.resized(**kwargs) if is_v2 else clip.resize(**kwargs)
 
     audio_clip = AudioFileClip(str(audio_path))
-    bg = with_duration(ColorClip(size=(FALLBACK_SIZE, FALLBACK_SIZE), color=CANVAS_BG), duration)
+    # CHANGED: chroma-key green instead of slate, so this path is also
+    # keyable by _finalize_alpha_video downstream.
+    bg = with_duration(ColorClip(size=(FALLBACK_SIZE, FALLBACK_SIZE), color=list(CHROMA_KEY_RGB)), duration)
     mascot = ImageClip(str(image_path))
     target_h = int(FALLBACK_SIZE * 0.82)
     if getattr(mascot, "h", 0) and mascot.h > 0:
@@ -531,11 +621,12 @@ def _render_bounce_moviepy(image_path: Path, audio_path: Path, output_path: Path
 
 def _render_bounce_ffmpeg(image_path: Path, audio_path: Path, output_path: Path, duration: float) -> None:
     if shutil.which("ffmpeg") is None:
-        raise RuntimeError("ffmpeg is not on PATH; cannot encode fallback MP4")
+        raise RuntimeError("ffmpeg is not on PATH; cannot encode fallback video")
 
     frames = max(int(math.ceil(duration * FALLBACK_FPS)), FALLBACK_FPS)
     padded = FALLBACK_SIZE + 80
-    bg_hex = "0x{:02X}{:02X}{:02X}".format(*CANVAS_BG)
+    # CHANGED: chroma-key green padding instead of slate hex.
+    bg_hex = "0x{:02X}{:02X}{:02X}".format(*CHROMA_KEY_RGB)
     zoom_expr = f"1+{BOUNCE_AMP}*sin(2*PI*{BOUNCE_HZ}*on/{FALLBACK_FPS})"
     vf = (
         f"[0:v]scale={padded}:{padded}:force_original_aspect_ratio=decrease,"
@@ -567,6 +658,51 @@ def _render_bounce_ffmpeg(image_path: Path, audio_path: Path, output_path: Path,
     if result.returncode != 0:
         tail = (result.stderr or "")[-800:]
         raise RuntimeError(f"ffmpeg bounce render failed:\n{tail}")
+
+
+# ------------------------------------------------------------------------------
+# CHANGED — new: chroma-key -> real alpha finalize step (used by every path)
+# ------------------------------------------------------------------------------
+def _finalize_alpha_video(raw_path: Path, output_path: Path) -> Path:
+    """Key the flat CHROMA_KEY_RGB background out of `raw_path` and encode a
+    genuine alpha-channel deliverable at `output_path` (VP9 in a WebM
+    container — supported natively by Remotion's <OffthreadVideo>).
+
+    This is the actual fix for the "mascot sits inside a visible dark box"
+    problem: previously the flat background was never removed, it was just
+    hoped to blend in via CSS, which cannot work with an opaque codec.
+    """
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("ffmpeg is required to key out the chroma background")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _run(filter_chain: str) -> subprocess.CompletedProcess:
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(raw_path),
+            "-vf", filter_chain,
+            "-c:v", "libvpx-vp9",
+            "-pix_fmt", "yuva420p",
+            "-auto-alt-ref", "0",
+            "-b:v", "0",
+            "-crf", "28",
+            "-c:a", "libopus",
+            "-b:a", "128k",
+            str(output_path),
+        ]
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+
+    # `despill` removes green-tinge bleed at the mascot's edges; not every
+    # ffmpeg build ships it, so fall back to colorkey-only if it errors.
+    chroma_hex = "0x{:02X}{:02X}{:02X}".format(*CHROMA_KEY_RGB)
+    result = _run(f"colorkey={chroma_hex}:0.30:0.12,despill=type=green,format=yuva420p")
+    if result.returncode != 0:
+        logger.warning("despill filter unavailable, retrying colorkey-only")
+        result = _run(f"colorkey={chroma_hex}:0.30:0.12,format=yuva420p")
+
+    if result.returncode != 0 or not output_path.is_file():
+        raise RuntimeError(f"Alpha keying failed:\n{(result.stderr or '')[-800:]}")
+    return output_path
 
 
 # ------------------------------------------------------------------------------
@@ -639,7 +775,7 @@ def _ensure_raster_image(path: Path) -> Path:
         return path
 
     png_path = TEMP_DIR / f"{path.stem}_raster_{os.getpid()}.png"
-    logger.info("Rasterizing SVG -> %s", png_path.name)
+    logger.info("Rasterizing SVG -> %s (chroma-key background)", png_path.name)
 
     errors: list[str] = []
     for converter in (_svg_via_cairosvg, _svg_via_browser, _svg_via_magick, _svg_via_ffmpeg):
@@ -657,12 +793,13 @@ def _ensure_raster_image(path: Path) -> Path:
 def _svg_via_cairosvg(svg_path: Path, png_path: Path) -> bool:
     import cairosvg
 
+    # CHANGED: chroma-key background instead of slate hex.
     cairosvg.svg2png(
         url=str(svg_path),
         write_to=str(png_path),
         output_width=FALLBACK_SIZE,
         output_height=FALLBACK_SIZE,
-        background_color="#0F172A",
+        background_color=CHROMA_KEY_HEX,
     )
     return True
 
@@ -677,12 +814,13 @@ def _svg_via_browser(svg_path: Path, png_path: Path) -> bool:
         local_svg = work / "mascot.svg"
         shutil.copy2(svg_path, local_svg)
         html_path = work / "mascot.html"
+        # CHANGED: chroma-key background instead of #0F172A.
         html_path.write_text(
             f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>
   html,body{{margin:0;padding:0;width:{FALLBACK_SIZE}px;height:{FALLBACK_SIZE}px;
-    background:#0F172A;display:flex;align-items:center;justify-content:center;overflow:hidden}}
+    background:{CHROMA_KEY_HEX};display:flex;align-items:center;justify-content:center;overflow:hidden}}
   img{{max-width:88%;max-height:88%}}
 </style></head>
 <body><img src="mascot.svg" alt="mascot"></body></html>
@@ -728,7 +866,7 @@ def _svg_via_magick(svg_path: Path, png_path: Path) -> bool:
         return False
     cmd = [
         magick,
-        "-background", "#0F172A",
+        "-background", CHROMA_KEY_HEX,  # CHANGED: was #0F172A
         "-density", "192",
         str(svg_path),
         "-resize", f"{FALLBACK_SIZE}x{FALLBACK_SIZE}",
@@ -741,11 +879,12 @@ def _svg_via_magick(svg_path: Path, png_path: Path) -> bool:
 def _svg_via_ffmpeg(svg_path: Path, png_path: Path) -> bool:
     if shutil.which("ffmpeg") is None:
         return False
+    chroma_hex = "0x{:02X}{:02X}{:02X}".format(*CHROMA_KEY_RGB)  # CHANGED
     cmd = [
         "ffmpeg", "-y",
         "-i", str(svg_path),
         "-vf", f"scale={FALLBACK_SIZE}:{FALLBACK_SIZE}:force_original_aspect_ratio=decrease,"
-               f"pad={FALLBACK_SIZE}:{FALLBACK_SIZE}:(ow-iw)/2:(oh-ih)/2:color=0x0F172A",
+               f"pad={FALLBACK_SIZE}:{FALLBACK_SIZE}:(ow-iw)/2:(oh-ih)/2:color={chroma_hex}",
         str(png_path),
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=40)
@@ -779,7 +918,13 @@ def _find_browser() -> Optional[str]:
 # Helpers
 # ------------------------------------------------------------------------------
 def _remux_h264(video_path: Path, audio_path: Path, output_path: Path) -> Path:
-    """Ensure final deliverable is H.264 + AAC MP4."""
+    """Normalize a raw engine output into a clean opaque H.264 + AAC MP4.
+
+    This is an *intermediate* artifact only — `_finalize_alpha_video` runs on
+    top of this afterward to produce the real transparent deliverable. Kept
+    as H.264 here deliberately: it's the most robust/compatible container
+    for this normalization step, and alpha is added in the step after.
+    """
     if shutil.which("ffmpeg") is None:
         shutil.copy2(video_path, output_path)
         return output_path
@@ -817,13 +962,13 @@ def _remux_h264(video_path: Path, audio_path: Path, output_path: Path) -> Path:
             str(output_path),
         ]
 
-    logger.info("Remuxing to H.264 MP4 -> %s", output_path.name)
+    logger.info("Normalizing engine output -> H.264 intermediate -> %s", output_path.name)
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
-    if proc.returncode != 0 or not _is_valid_mp4(output_path):
-        if _is_valid_mp4(video_path):
+    if proc.returncode != 0 or not _is_valid_video(output_path):
+        if _is_valid_video(video_path):
             shutil.copy2(video_path, output_path)
             return output_path
-        raise RuntimeError(f"H.264 remux failed:\n{(proc.stderr or '')[-600:]}")
+        raise RuntimeError(f"H.264 normalize failed:\n{(proc.stderr or '')[-600:]}")
     return output_path
 
 
@@ -883,7 +1028,8 @@ def _media_duration(path: Path) -> float:
         return 3.0
 
 
-def _is_valid_mp4(path: Optional[Path]) -> bool:
+def _is_valid_video(path: Optional[Path]) -> bool:
+    """Renamed from `_is_valid_mp4` — works for any container ffprobe reads."""
     if not path or not Path(path).is_file() or Path(path).stat().st_size < 1024:
         return False
     if shutil.which("ffprobe") is None:
@@ -910,4 +1056,6 @@ __all__ = [
     "resolve_mascot_dir",
     "VALID_POSES",
     "PHOTO_AVATAR_NAMES",
+    "CHROMA_KEY_RGB",
+    "CHROMA_KEY_HEX",
 ]

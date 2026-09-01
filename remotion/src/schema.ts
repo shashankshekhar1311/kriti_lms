@@ -34,6 +34,13 @@ export const visualEventSchema = z.object({
   card_position: xySchema.optional(),
   glowing_badge: z.boolean().optional(),
   mascot_pose: mascotPoseSchema.optional(),
+  // CHANGED: Chapter_Agent.py's panels_to_visual_events_precise() has always
+  // written a per-event "bg_image_url" (one SDXL image per beat) — it just
+  // was never part of this schema, so ComicLesson.tsx could never read it
+  // and every micro-lesson silently used only the single top-level
+  // bg_image_url for its entire duration. Adding it here is what lets the
+  // background actually change per beat (see ComicLesson.tsx).
+  bg_image_url: z.string().optional(),
 });
 
 export const comicLessonSchema = z.object({
