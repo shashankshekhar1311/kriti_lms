@@ -7,12 +7,16 @@ import {popAt, useFadeSlide} from '../../hooks/use-frame-motion';
 export const WorkedExample: React.FC<{
   title: string;
   items: Array<string | number>;
-}> = ({title, items}) => {
+  durationInFrames?: number;
+}> = ({title, items, durationInFrames}) => {
   const heading = useFadeSlide(1, 16);
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const steps = items.map((item) => String(item));
   const answerIndex = steps.length - 1;
+  const perItemStride = durationInFrames
+    ? Math.max(6, Math.round((durationInFrames - 28) / Math.max(1, steps.length)))
+    : 7;
 
   return (
     <div
@@ -49,7 +53,7 @@ export const WorkedExample: React.FC<{
         }}
       >
         {steps.map((step, index) => {
-          const pop = popAt(frame, fps, 6 + index * 7);
+          const pop = popAt(frame, fps, 6 + index * perItemStride);
           const isAnswer = index === answerIndex && steps.length > 1;
           const accent = isAnswer ? COLORS.amber : COLORS.cyan;
           return (

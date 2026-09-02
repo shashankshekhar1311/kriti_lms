@@ -78,16 +78,25 @@ export const FloatingMathCard: React.FC<{
           />
         ) : null}
         {event.type === 'concept_card' ? (
-          <PlaceValueGrid title={event.title} items={event.items} />
+          <PlaceValueGrid
+            title={event.title}
+            items={event.items}
+            durationInFrames={durationInFrames}
+          />
         ) : null}
         {event.type === 'math_step' ? (
-          <WorkedExample title={event.title} items={event.items} />
+          <WorkedExample
+            title={event.title}
+            items={event.items}
+            durationInFrames={durationInFrames}
+          />
         ) : null}
         {event.type === 'summary_badge' ? (
           <SummaryContent
             title={event.title}
             items={event.items}
             studentName={studentName}
+            durationInFrames={durationInFrames}
           />
         ) : null}
       </div>
@@ -99,12 +108,16 @@ const SummaryContent: React.FC<{
   title: string;
   items: Array<string | number>;
   studentName: string;
-}> = ({title, items, studentName}) => {
+  durationInFrames?: number;
+}> = ({title, items, studentName, durationInFrames}) => {
   const heading = useFadeSlide(2, 16);
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const glow = interpolate(Math.sin(frame / 8), [-1, 1], [0.45, 1]);
   const badgePop = popAt(frame, fps, 3);
+  const perItemStride = durationInFrames
+    ? Math.max(6, Math.round((durationInFrames - 40) / Math.max(1, items.length)))
+    : 8;
 
   return (
     <div
@@ -180,7 +193,9 @@ const SummaryContent: React.FC<{
           flex: 1,
         }}
       >
-        {items.map((item, index) => (
+        {items.map((item, index) => {
+          const itemPop = popAt(frame, fps, 10 + index * perItemStride);
+          return (
           <div
             key={`${String(item)}-${index}`}
             style={{
@@ -194,6 +209,12 @@ const SummaryContent: React.FC<{
               border: '1px solid rgba(255, 255, 255, 0.12)',
               background: 'rgba(6, 182, 212, 0.12)',
               boxSizing: 'border-box',
+              opacity: interpolate(itemPop, [0, 1], [0, 1], {
+                extrapolateRight: 'clamp',
+              }),
+              transform: `translateX(${interpolate(itemPop, [0, 1], [24, 0], {
+                extrapolateRight: 'clamp',
+              })}px)`,
             }}
           >
             <span style={{flexShrink: 0, lineHeight: 1.35}}>★</span>
@@ -211,7 +232,8 @@ const SummaryContent: React.FC<{
               {String(item)}
             </span>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

@@ -47,11 +47,11 @@ export const WorldSpeechBubble: React.FC<{
           style={{
             margin: 0,
             fontFamily: bodyFont,
-            fontSize: 22,
+            fontSize: 20,
             fontWeight: 800,
-            lineHeight: 1.25,
+            lineHeight: 1.3,
             color: COLORS.ink,
-            ...clampLines(4),
+            ...clampLines(6),
           }}
         >
           {text}

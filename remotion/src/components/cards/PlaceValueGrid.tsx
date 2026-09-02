@@ -17,7 +17,8 @@ const placeValueOf = (digit: number, fromRight: number): number =>
 export const PlaceValueGrid: React.FC<{
   title: string;
   items: Array<string | number>;
-}> = ({title, items}) => {
+  durationInFrames?: number;
+}> = ({title, items, durationInFrames}) => {
   const heading = useFadeSlide(1, 16);
   const allDigits = items.length > 0 && items.every(isDigitToken);
 
@@ -47,15 +48,18 @@ export const PlaceValueGrid: React.FC<{
         {title}
       </motion.h2>
       {allDigits ? (
-        <DigitPlaceGrid items={items} />
+        <DigitPlaceGrid items={items} durationInFrames={durationInFrames} />
       ) : (
-        <ValueChipGrid items={items} />
+        <ValueChipGrid items={items} durationInFrames={durationInFrames} />
       )}
     </div>
   );
 };
 
-const DigitPlaceGrid: React.FC<{items: Array<string | number>}> = ({items}) => {
+const DigitPlaceGrid: React.FC<{
+  items: Array<string | number>;
+  durationInFrames?: number;
+}> = ({items}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const digits = items.map((item) => Number(item)).slice(-PLACE_LABELS.length);
@@ -199,7 +203,10 @@ const DigitPlaceGrid: React.FC<{items: Array<string | number>}> = ({items}) => {
   );
 };
 
-const ValueChipGrid: React.FC<{items: Array<string | number>}> = ({items}) => (
+const ValueChipGrid: React.FC<{
+  items: Array<string | number>;
+  durationInFrames?: number;
+}> = ({items, durationInFrames}) => (
   <div
     style={{
       flex: 1,
@@ -211,13 +218,27 @@ const ValueChipGrid: React.FC<{items: Array<string | number>}> = ({items}) => (
     }}
   >
     {items.map((item, index) => (
-      <ValueChip key={`${String(item)}-${index}`} value={String(item)} index={index} />
+      <ValueChip
+        key={`${String(item)}-${index}`}
+        value={String(item)}
+        index={index}
+        durationInFrames={durationInFrames}
+        itemCount={items.length}
+      />
     ))}
   </div>
 );
 
-const ValueChip: React.FC<{value: string; index: number}> = ({value, index}) => {
-  const motionValues = useFadeSlide(6 + index * 5, 22);
+const ValueChip: React.FC<{
+  value: string;
+  index: number;
+  durationInFrames?: number;
+  itemCount: number;
+}> = ({value, index, durationInFrames, itemCount}) => {
+  const perItemStride = durationInFrames
+    ? Math.max(6, Math.round((durationInFrames - 28) / Math.max(1, itemCount)))
+    : 5;
+  const motionValues = useFadeSlide(8 + index * perItemStride, 22);
   const accent = index % 2 === 0 ? COLORS.cyan : COLORS.amber;
   return (
     <motion.div

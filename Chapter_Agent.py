@@ -116,6 +116,12 @@ from lip_sync_service import (  # noqa: E402
     resolve_mascot_dir,
     resolve_pose_image,
 )
+from lesson_sync import (  # noqa: E402
+    align_storyboard_panels,
+    audit_panel_coverage,
+    is_storyboard_complete,
+    split_timeline_cues,
+)
 from artifact_config import (  # noqa: E402
     artifacts_enabled_for_subject,
     build_chapter_id,
@@ -654,6 +660,11 @@ def build_gap_fill_prompt(class_name, student_name, existing_lessons, missing_te
     - Every "title" string MUST be {MAX_TITLE_CHARS} characters or fewer.
     - Every string inside "items" MUST be {MAX_ITEM_CHARS} characters or fewer.
     - Chip/label-style short phrases MUST be {MAX_CHIP_CHARS} characters or fewer.
+
+    NARRATION-TO-CARD ALIGNMENT:
+    - Each panel's "items" must list every named term spoken in that panel's narration portion.
+    - Use 3–6 separate items per concept_card; one chip per fact/name.
+    - Keep narration sentences under 100 characters when possible.
 
     PANEL COUNT: use between {MIN_PANELS_PER_LESSON} and {MAX_PANELS_PER_LESSON}
     panels — one panel per distinct missing topic, not merged together. Each
@@ -1291,6 +1302,13 @@ def produce_comic_lesson(
     full_audio_path, narration_timeline, used_voice = synthesize_narration_timeline(
         narration_text, voice, lesson_dir
     )
+    raw_cue_count = len(narration_timeline)
+    narration_timeline = split_timeline_cues(narration_timeline)
+    if len(narration_timeline) != raw_cue_count:
+        print(
+            f"   💬 Split long narration lines for speech bubble: "
+            f"{raw_cue_count} → {len(narration_timeline)} cues"
+        )
     last_end = narration_timeline[-1]["end_time"] if narration_timeline else 0.0
     print(f"   ⏱️ Timeline ready: {len(narration_timeline)} sentences, {last_end:.2f}s ({used_voice})")
 
@@ -1496,6 +1514,16 @@ def build_storyboard_prompt(class_name, student_name, artifact_catalog=""):
       Never rely on the renderer to truncate text for you — write it short to begin with.
     - Chip/label-style short phrases MUST be {MAX_CHIP_CHARS} characters or fewer.
 
+    NARRATION-TO-CARD ALIGNMENT (all subjects — history, science, math, geography):
+    - Each panel's "items" MUST list EVERY named person, place, kingdom, formula, step,
+      or key term spoken during that panel's portion of the narration.
+    - Use separate chips — do NOT compress lists into one item
+      (bad: "Inside: Shungas, Chedis" when narration names Satavahanas, Cholas too).
+    - Target item counts: intro 2–4 items; concept_card 3–6 items; math_step 3–6 items;
+      summary_badge 4–6 items.
+    - Write narration in shorter sentences (under 100 characters when possible) so the
+      on-screen speech bubble can show the full line.
+
     ADAPTIVE PANEL COUNT MANDATE (one fact per panel, not merged):
     - Each micro-lesson should have between {MIN_PANELS_PER_LESSON} and
       {MAX_PANELS_PER_LESSON} panels — one panel per major sub-point of that
@@ -1540,7 +1568,7 @@ def build_storyboard_prompt(class_name, student_name, artifact_catalog=""):
           "visual_mode": "artifact",
           "artifact_id": "trade_routes_map",
           "title": "Concept Title",
-          "items": ["Point 1", "Point 2"],
+          "items": ["Point 1", "Point 2", "Point 3", "Point 4"],
           "mascot_pose": "pointing"
         }},
         {{
@@ -1549,7 +1577,7 @@ def build_storyboard_prompt(class_name, student_name, artifact_catalog=""):
           "bg_prompt": "Vivid SDXL scene description",
           "visual_mode": "generated",
           "title": "Concept Title",
-          "items": ["Point 1", "Point 2"],
+          "items": ["Fact A", "Fact B", "Fact C"],
           "mascot_pose": "pointing"
         }},
         {{
@@ -1557,7 +1585,7 @@ def build_storyboard_prompt(class_name, student_name, artifact_catalog=""):
           "type": "summary_badge",
           "bg_prompt": "Vivid SDXL scene description",
           "title": "Recap Title",
-          "items": ["Summary Point 1", "Summary Point 2"],
+          "items": ["Summary 1", "Summary 2", "Summary 3", "Summary 4"],
           "mascot_pose": "happy"
         }}
       ],
@@ -1583,6 +1611,19 @@ def _process_single_lesson(
 ):
     if not isinstance(lesson, dict):
         return None
+
+    if not is_storyboard_complete(lesson, min_panels=MIN_PANELS_PER_LESSON):
+        lesson_title_guess = lesson.get("lesson_title") or lesson.get("title") or f"Lesson {idx + 1}"
+        print(
+            f"   ❌ ERROR: Incomplete storyboard for [{lesson_title_guess}] — "
+            f"truncated narration and/or missing panels. Skipping render. "
+            f"Re-run with --force to regenerate this lesson."
+        )
+        return None
+
+    lesson = align_storyboard_panels(dict(lesson), split_narration_sentences)
+    for warning in audit_panel_coverage(lesson, split_narration_sentences):
+        print(f"   ⚠️ Panel coverage: {warning}")
 
     title, bg_prompt, narration_text, panels, initial_quiz = normalize_storyboard(lesson)
     title = title or f"Micro-Lesson {idx + 1}{label_suffix}"
