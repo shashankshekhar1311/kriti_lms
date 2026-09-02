@@ -1,7 +1,7 @@
 import {interpolate, useCurrentFrame, useVideoConfig} from 'remotion';
 import {motion} from 'framer-motion';
 import type {VisualEvent} from '../schema';
-import {COLORS, clampLines, ellipsis} from '../theme';
+import {COLORS, clampLines} from '../theme';
 import {bodyFont, displayFont} from '../fonts';
 import {useFadeSlide, popAt} from '../hooks/use-frame-motion';
 import {CARDS_ZONE, GLASS_CARD, placeFloatingCard} from '../layout';
@@ -37,8 +37,8 @@ export const FloatingMathCard: React.FC<{
         top: box.top,
         width: box.width,
         maxWidth: '100%',
-        height: box.height,
-        maxHeight: CARDS_ZONE.height,
+        height: 'auto',
+        maxHeight: Math.min(box.maxHeight, CARDS_ZONE.height - box.top),
         zIndex: 5,
         opacity: appear,
         transform: `translateY(${(1 - appear) * 28}px) scale(${0.96 + appear * 0.04})`,
@@ -50,7 +50,8 @@ export const FloatingMathCard: React.FC<{
         style={{
           width: '100%',
           maxWidth: '100%',
-          height: '100%',
+          height: 'auto',
+          maxHeight: '100%',
           boxSizing: 'border-box',
           borderRadius: GLASS_CARD.borderRadius,
           border: GLASS_CARD.border,
@@ -67,7 +68,11 @@ export const FloatingMathCard: React.FC<{
         }}
       >
         {event.type === 'intro' ? (
-          <IntroCard title={event.title} items={event.items} />
+          <IntroCard
+            title={event.title}
+            items={event.items}
+            durationInFrames={durationInFrames}
+          />
         ) : null}
         {event.type === 'concept_card' ? (
           <PlaceValueGrid title={event.title} items={event.items} />
@@ -154,8 +159,9 @@ const SummaryContent: React.FC<{
           fontSize: 22,
           fontWeight: 800,
           color: COLORS.cyan,
-          ...ellipsis,
           maxWidth: '100%',
+          textAlign: 'center',
+          ...clampLines(1),
         }}
       >
         Trophy unlocked, {studentName}!
@@ -178,7 +184,7 @@ const SummaryContent: React.FC<{
               minWidth: 0,
               maxWidth: '100%',
               display: 'flex',
-              alignItems: 'center',
+              alignItems: 'flex-start',
               gap: 10,
               padding: '10px 14px',
               borderRadius: 14,
@@ -187,7 +193,7 @@ const SummaryContent: React.FC<{
               boxSizing: 'border-box',
             }}
           >
-            <span style={{flexShrink: 0}}>★</span>
+            <span style={{flexShrink: 0, lineHeight: 1.35}}>★</span>
             <span
               style={{
                 fontFamily: bodyFont,
@@ -195,7 +201,8 @@ const SummaryContent: React.FC<{
                 fontWeight: 800,
                 color: COLORS.white,
                 minWidth: 0,
-                ...ellipsis,
+                lineHeight: 1.35,
+                ...clampLines(2),
               }}
             >
               {String(item)}

@@ -1,6 +1,6 @@
 import {interpolate, useCurrentFrame, useVideoConfig} from 'remotion';
 import {motion} from 'framer-motion';
-import {COLORS, clampLines, ellipsis} from '../../theme';
+import {COLORS, clampLines} from '../../theme';
 import {bodyFont, displayFont} from '../../fonts';
 import {popAt, useFadeSlide} from '../../hooks/use-frame-motion';
 
@@ -59,7 +59,7 @@ export const WorkedExample: React.FC<{
               style={{
                 minWidth: 0,
                 display: 'flex',
-                alignItems: 'center',
+                alignItems: 'flex-start',
                 gap: 14,
                 padding: '12px 16px',
                 borderRadius: 16,
@@ -99,7 +99,8 @@ export const WorkedExample: React.FC<{
                   fontWeight: 800,
                   color: COLORS.white,
                   minWidth: 0,
-                  ...ellipsis,
+                  lineHeight: 1.25,
+                  ...clampLines(2),
                 }}
               >
                 {step}

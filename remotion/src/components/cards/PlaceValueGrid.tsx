@@ -121,7 +121,8 @@ const DigitPlaceGrid: React.FC<{items: Array<string | number>}> = ({items}) => {
                   textTransform: 'uppercase',
                   color: accent,
                   maxWidth: '100%',
-                  ...ellipsis,
+                  textAlign: 'center',
+                  ...clampLines(2),
                 }}
               >
                 {labels[index]}
@@ -204,7 +205,7 @@ const ValueChipGrid: React.FC<{items: Array<string | number>}> = ({items}) => (
       flex: 1,
       minHeight: 0,
       display: 'grid',
-      gridTemplateColumns: items.length > 4 ? '1fr 1fr' : `repeat(${Math.min(items.length, 4)}, minmax(0, 1fr))`,
+      gridTemplateColumns: '1fr',
       gap: 14,
       alignContent: 'start',
     }}
@@ -227,20 +228,22 @@ const ValueChip: React.FC<{value: string; index: number}> = ({value, index}) => 
         border: `3px solid ${accent}`,
         background: COLORS.slateRaised,
         boxShadow: `0 0 16px ${accent}66`,
-        padding: '20px 12px',
+        padding: '16px 20px',
         display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+        alignItems: 'flex-start',
+        justifyContent: 'flex-start',
         opacity: motionValues.opacity,
         transform: `translateY(${motionValues.y}px) scale(${motionValues.scale})`,
       }}
     >
       <span
         style={{
-          fontFamily: displayFont,
-          fontSize: 36,
+          fontFamily: bodyFont,
+          fontSize: 28,
+          fontWeight: 800,
           color: COLORS.white,
-          ...ellipsis,
+          lineHeight: 1.25,
+          ...clampLines(2),
           maxWidth: '100%',
         }}
       >

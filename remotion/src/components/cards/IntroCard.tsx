@@ -1,5 +1,5 @@
 import {motion} from 'framer-motion';
-import {COLORS, clampLines, ellipsis} from '../../theme';
+import {COLORS, clampLines} from '../../theme';
 import {bodyFont, displayFont} from '../../fonts';
 import {useFadeSlide} from '../../hooks/use-frame-motion';
 
@@ -8,8 +8,13 @@ const toText = (item: string | number): string => String(item);
 export const IntroCard: React.FC<{
   title: string;
   items: Array<string | number>;
-}> = ({title, items}) => {
+  durationInFrames?: number;
+}> = ({title, items, durationInFrames}) => {
   const heading = useFadeSlide(2, 20);
+
+  const perItemStride = durationInFrames
+    ? Math.max(6, Math.round((durationInFrames - 28) / Math.max(1, items.length)))
+    : 6;
 
   return (
     <div
@@ -40,7 +45,7 @@ export const IntroCard: React.FC<{
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: items.length > 3 ? '1fr 1fr' : '1fr',
+          gridTemplateColumns: '1fr',
           gap: 16,
           minHeight: 0,
           flex: 1,
@@ -48,21 +53,30 @@ export const IntroCard: React.FC<{
         }}
       >
         {items.map((item, index) => (
-          <IntroChip key={`${toText(item)}-${index}`} text={toText(item)} index={index} />
+          <IntroChip
+            key={`${toText(item)}-${index}`}
+            text={toText(item)}
+            index={index}
+            delayFrames={8 + index * perItemStride}
+          />
         ))}
       </div>
     </div>
   );
 };
 
-const IntroChip: React.FC<{text: string; index: number}> = ({text, index}) => {
-  const motionValues = useFadeSlide(8 + index * 6, 30);
+const IntroChip: React.FC<{text: string; index: number; delayFrames: number}> = ({
+  text,
+  index,
+  delayFrames,
+}) => {
+  const motionValues = useFadeSlide(delayFrames, 30);
   return (
     <motion.div
       initial={false}
       style={{
         display: 'flex',
-        alignItems: 'center',
+        alignItems: 'flex-start',
         gap: 16,
         minWidth: 0,
         padding: '18px 22px',
@@ -102,7 +116,8 @@ const IntroChip: React.FC<{text: string; index: number}> = ({text, index}) => {
           fontWeight: 800,
           color: COLORS.white,
           minWidth: 0,
-          ...ellipsis,
+          lineHeight: 1.25,
+          ...clampLines(2),
         }}
       >
         {text}
