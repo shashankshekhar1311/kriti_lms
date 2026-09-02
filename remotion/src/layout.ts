@@ -22,6 +22,21 @@ export const CARDS_ZONE = {
   zIndex: 10,
 } as const;
 
+/** Narrower card column when a textbook artifact panel is visible */
+export const CARDS_ZONE_COMPACT = {
+  ...CARDS_ZONE,
+  width: 620,
+} as const;
+
+/** Right-side textbook reference image panel (between cards and mascot) */
+export const ARTIFACT_ZONE = {
+  left: CARDS_ZONE.left + CARDS_ZONE_COMPACT.width + LAYOUT.gutter,
+  top: CARDS_ZONE.top,
+  width: 520,
+  height: CARDS_ZONE.height,
+  zIndex: 12,
+} as const;
+
 export const GLASS_CARD = {
   background: 'rgba(30, 41, 59, 0.75)',
   border: '1px solid rgba(255, 255, 255, 0.1)',
@@ -73,16 +88,17 @@ export const placeFloatingCard = (
   type: VisualEventType,
   _mascot?: MascotPosition | null,
   _cardPosition?: {x: number; y: number} | null,
+  options?: {compact?: boolean},
 ): CardBox => {
+  const zoneWidth = options?.compact ? CARDS_ZONE_COMPACT.width : CARDS_ZONE.width;
   const maxHeight = Math.min(CARD_MAX_HEIGHT[type], CARDS_ZONE.height);
-  const width = Math.min(CARDS_ZONE.width, CARDS_ZONE.width);
   const topOffset = type === 'intro' ? 0 : 48;
   const pad = 8;
 
   return {
     left: 0,
     top: clamp(topOffset, pad, CARDS_ZONE.height - pad),
-    width,
+    width: zoneWidth,
     maxHeight,
   };
 };
@@ -108,6 +124,18 @@ export const cardsZoneStyle: CSSProperties = {
   width: CARDS_ZONE.width,
   height: CARDS_ZONE.height,
   zIndex: CARDS_ZONE.zIndex,
+  overflow: 'hidden',
+  pointerEvents: 'none',
+  boxSizing: 'border-box',
+};
+
+export const artifactZoneStyle: CSSProperties = {
+  position: 'absolute',
+  left: ARTIFACT_ZONE.left,
+  top: ARTIFACT_ZONE.top,
+  width: ARTIFACT_ZONE.width,
+  height: ARTIFACT_ZONE.height,
+  zIndex: ARTIFACT_ZONE.zIndex,
   overflow: 'hidden',
   pointerEvents: 'none',
   boxSizing: 'border-box',

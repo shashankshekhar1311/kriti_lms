@@ -1,0 +1,28 @@
+{
+  "chapter_id": "class7_science_light",
+  "subject": "science",
+  "class_name": "Class-7",
+  "chapter_title": "Light — Reflection and Refraction (example manifest)",
+  "artifacts": [
+    {
+      "id": "plane_mirror_diagram",
+      "file": "plane_mirror_diagram.svg",
+      "type": "diagram",
+      "caption": "Ray diagram for reflection in a plane mirror",
+      "page_ref": 112,
+      "topics": ["reflection", "plane mirror", "ray diagram"],
+      "panel_hint": "Use when explaining how light reflects off a plane mirror",
+      "approved": true
+    },
+    {
+      "id": "lens_types_chart",
+      "file": "lens_types_chart.svg",
+      "type": "chart",
+      "caption": "Convex and concave lenses",
+      "page_ref": 118,
+      "topics": ["lens", "convex", "concave", "refraction"],
+      "panel_hint": "Use when comparing convex vs concave lenses",
+      "approved": true
+    }
+  ]
+}

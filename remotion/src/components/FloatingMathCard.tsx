@@ -15,7 +15,10 @@ export const FloatingMathCard: React.FC<{
   durationInFrames: number;
 }> = ({event, studentName, durationInFrames}) => {
   const frame = useCurrentFrame();
-  const box = placeFloatingCard(event.type, event.mascot_position, event.card_position);
+  const compact = Boolean(event.artifact_image_url?.trim());
+  const box = placeFloatingCard(event.type, event.mascot_position, event.card_position, {
+    compact,
+  });
   const enter = interpolate(frame, [0, 12], [0, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',

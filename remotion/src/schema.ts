@@ -30,6 +30,8 @@ export const mascotClipSchema = z.object({
   pose: mascotPoseSchema,
 });
 
+export const visualModeSchema = z.enum(['generated', 'artifact', 'hybrid']);
+
 export const visualEventSchema = z.object({
   type: z.enum(['intro', 'concept_card', 'math_step', 'summary_badge']),
   start_time: z.number().min(0),
@@ -47,6 +49,12 @@ export const visualEventSchema = z.object({
   // bg_image_url for its entire duration. Adding it here is what lets the
   // background actually change per beat (see ComicLesson.tsx).
   bg_image_url: z.string().optional(),
+  /** Phase 0: textbook reference image mode (rendering lands in Phase 1). */
+  visual_mode: visualModeSchema.optional(),
+  artifact_id: z.string().optional(),
+  artifact_image_url: z.string().optional(),
+  artifact_caption: z.string().optional(),
+  artifact_source: z.string().optional(),
 });
 
 export const comicLessonSchema = z.object({
@@ -60,6 +68,10 @@ export const comicLessonSchema = z.object({
   mascot_clips: z.array(mascotClipSchema).optional(),
   narration_timeline: z.array(narrationLineSchema),
   visual_events: z.array(visualEventSchema),
+  /** Phase 0 lesson metadata for artifact gating (optional). */
+  subject: z.string().optional(),
+  chapter_id: z.string().optional(),
+  artifacts_enabled: z.boolean().optional(),
 });
 
 export type NarrationLine = z.infer<typeof narrationLineSchema>;
@@ -68,6 +80,7 @@ export type MascotClip = z.infer<typeof mascotClipSchema>;
 export type VisualEvent = z.infer<typeof visualEventSchema>;
 export type ComicLessonProps = z.infer<typeof comicLessonSchema>;
 export type VisualEventType = VisualEvent['type'];
+export type VisualMode = z.infer<typeof visualModeSchema>;
 export type MascotPose = z.infer<typeof mascotPoseSchema>;
 export type LipSyncMode = z.infer<typeof lipSyncModeSchema>;
 export type MascotId = z.infer<typeof mascotIdSchema>;

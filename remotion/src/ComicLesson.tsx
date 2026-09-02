@@ -8,11 +8,12 @@ import {
 } from './timing';
 import {buildSfxTriggers} from './audio-triggers';
 import {NARRATION_VOLUME, resolveSfxSrc} from './sfx';
-import {cardsZoneStyle, mascotPanelStyle} from './layout';
+import {cardsZoneStyle, mascotPanelStyle, artifactZoneStyle} from './layout';
 import {FullCanvasStage} from './components/FullCanvasStage';
 import {DynamicBackground} from './components/DynamicBackground';
 import {WorldSpeechBubble} from './components/WorldSpeechBubble';
 import {FloatingMathCard} from './components/FloatingMathCard';
+import {ArtifactPanel, eventShowsArtifact} from './components/ArtifactPanel';
 import {ComicAudioFx} from './components/ComicAudioFx';
 import {MascotLayer} from './MascotLayer';
 import {SvgMascotCharacter} from './components/SvgMascotCharacter';
@@ -99,6 +100,29 @@ export const ComicLesson: React.FC<ComicLessonProps> = ({
               <FloatingMathCard
                 event={event}
                 studentName={student_name}
+                durationInFrames={window.durationInFrames}
+              />
+            </Sequence>
+          );
+        })}
+      </div>
+
+      <div style={artifactZoneStyle}>
+        {visual_events.map((event, index) => {
+          if (!eventShowsArtifact(event)) {
+            return null;
+          }
+          const window = eventWindow(event, fps);
+          return (
+            <Sequence
+              key={`artifact-${event.start_time}-${index}`}
+              from={window.from}
+              durationInFrames={window.durationInFrames}
+              name={`Artifact: ${event.title}`}
+              layout="none"
+            >
+              <ArtifactPanel
+                event={event}
                 durationInFrames={window.durationInFrames}
               />
             </Sequence>

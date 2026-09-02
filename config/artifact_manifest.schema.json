@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kriti.local/schemas/artifact_manifest.schema.json",
+  "title": "Chapter Artifact Manifest",
+  "description": "Curated textbook reference images for a single chapter (Phase 0).",
+  "type": "object",
+  "required": ["chapter_id", "subject", "artifacts"],
+  "additionalProperties": false,
+  "properties": {
+    "chapter_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable slug, e.g. class7_science_ch12_light"
+    },
+    "subject": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Canonical subject key from config/subjects.json artifacts_enabled list"
+    },
+    "class_name": {
+      "type": "string"
+    },
+    "chapter_title": {
+      "type": "string"
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/artifactEntry"
+      }
+    }
+  },
+  "$defs": {
+    "artifactEntry": {
+      "type": "object",
+      "required": ["id", "file", "caption"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$",
+          "description": "Referenced by storyboard panels as artifact_id"
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Filename relative to this manifest's artifacts/ folder"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["map", "diagram", "photo", "chart", "inscription", "artifact", "other"]
+        },
+        "caption": {
+          "type": "string",
+          "minLength": 1
+        },
+        "page_ref": {
+          "type": ["string", "integer"]
+        },
+        "topics": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "panel_hint": {
+          "type": "string",
+          "description": "Guidance for storyboard LLM on when to use this image"
+        },
+        "approved": {
+          "type": "boolean",
+          "default": false,
+          "description": "Must be true before image is copied into lesson output"
+        }
+      }
+    }
+  }
+}

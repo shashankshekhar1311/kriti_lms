@@ -116,6 +116,16 @@ from lip_sync_service import (  # noqa: E402
     resolve_mascot_dir,
     resolve_pose_image,
 )
+from artifact_config import (  # noqa: E402
+    artifacts_enabled_for_subject,
+    build_chapter_id,
+    copy_artifact_assets_to_public,
+    format_manifest_for_prompt,
+    load_chapter_manifest,
+    resolve_panel_artifact_fields,
+    resolve_subject_key,
+    should_skip_sdxl_for_beat,
+)
 
 CUSTOM_TEMP = BASE_DIR / "temp"
 CUSTOM_TEMP.mkdir(exist_ok=True)
@@ -442,7 +452,14 @@ def _phase_defaults(idx: int, total: int) -> dict:
     }
 
 
-def panels_to_visual_events_precise(panels, narration_timeline, lesson_dir):
+def panels_to_visual_events_precise(
+    panels,
+    narration_timeline,
+    lesson_dir,
+    *,
+    artifacts_enabled=False,
+    chapter_manifest=None,
+):
     raw_panels = panels if isinstance(panels, list) else []
     if len(raw_panels) > MAX_PANELS_PER_LESSON:
         print(
@@ -476,10 +493,23 @@ def panels_to_visual_events_precise(panels, narration_timeline, lesson_dir):
 
         event_type = _normalize_event_type(raw_type, phase_hint=phase_raw, fallback=defaults["event_type"])
 
-        bg_filename = f"bg_phase_{idx + 1}.jpg"
-        generate_story_background(panel.get("bg_prompt", ""), lesson_dir / bg_filename)
+        artifact_fields = resolve_panel_artifact_fields(
+            panel,
+            artifacts_enabled=artifacts_enabled,
+            manifest=chapter_manifest,
+            lesson_dir=Path(lesson_dir),
+        )
+        has_artifact = bool(artifact_fields.get("artifact_image_url"))
+        visual_mode = artifact_fields.get("visual_mode", "generated")
 
-        events.append({
+        bg_filename = f"bg_phase_{idx + 1}.jpg"
+        if should_skip_sdxl_for_beat(visual_mode, has_artifact=has_artifact):
+            print(f"   🖼️ Artifact beat {idx + 1} — skipping SDXL ({bg_filename})")
+            _create_fallback_background(lesson_dir / bg_filename)
+        else:
+            generate_story_background(panel.get("bg_prompt", ""), lesson_dir / bg_filename)
+
+        event = {
             "type": event_type,
             "start_time": start_time,
             "end_time": end_time,
@@ -494,7 +524,9 @@ def panels_to_visual_events_precise(panels, narration_timeline, lesson_dir):
             "card_position": world_to_canvas(_as_xy(panel.get("card_position"), defaults["card"])),
             "glowing_badge": bool(panel.get("glowing_badge", defaults["glowing_badge"])),
             "bg_image_url": bg_filename
-        })
+        }
+        event.update(artifact_fields)
+        events.append(event)
     return events
 
 def normalize_storyboard(lesson):
@@ -1159,6 +1191,8 @@ def render_remotion(props, lesson_dir, output_path):
             if bg_src.is_file():
                 shutil.copy2(bg_src, REMOTION_PUBLIC_DIR / bg_name)
 
+    copy_artifact_assets_to_public(props, lesson_dir, REMOTION_PUBLIC_DIR)
+
     published_videos = []
     published_audio = []
     for clip in props.get("mascot_clips") or []:
@@ -1247,6 +1281,11 @@ def produce_comic_lesson(
     voice="en-US-AndrewMultilingualNeural",
     student_name=None,
     force_regen=False,
+    *,
+    subject_name=None,
+    class_name=None,
+    chapter_name=None,
+    chapter_output_dir=None,
 ):
     print(f"   🎙️ Synthesizing narration.mp3 with exact sentence timestamps ({voice})...")
     full_audio_path, narration_timeline, used_voice = synthesize_narration_timeline(
@@ -1255,7 +1294,34 @@ def produce_comic_lesson(
     last_end = narration_timeline[-1]["end_time"] if narration_timeline else 0.0
     print(f"   ⏱️ Timeline ready: {len(narration_timeline)} sentences, {last_end:.2f}s ({used_voice})")
 
-    visual_events = panels_to_visual_events_precise(panels, narration_timeline, lesson_dir)
+    lesson_dir = Path(lesson_dir)
+    chapter_id = (
+        build_chapter_id(class_name, subject_name, chapter_name)
+        if class_name and subject_name and chapter_name
+        else None
+    )
+    artifacts_enabled = artifacts_enabled_for_subject(subject_name or "")
+    chapter_manifest = None
+    if artifacts_enabled and chapter_id:
+        chapter_manifest = load_chapter_manifest(
+            chapter_id,
+            chapter_output_dir=chapter_output_dir,
+        )
+        if chapter_manifest:
+            print(
+                f"   🖼️ Artifact manifest loaded ({chapter_id}): "
+                f"{len(chapter_manifest.get('artifacts', []))} entries"
+            )
+        else:
+            print(f"   ℹ️ Artifacts enabled for subject, but no manifest found for {chapter_id}")
+
+    visual_events = panels_to_visual_events_precise(
+        panels,
+        narration_timeline,
+        lesson_dir,
+        artifacts_enabled=artifacts_enabled,
+        chapter_manifest=chapter_manifest,
+    )
     
     timeline_file = lesson_dir / "narration_timeline.json"
     with open(timeline_file, "w", encoding="utf-8") as f:
@@ -1344,6 +1410,9 @@ def produce_comic_lesson(
         mascot_id=mascot_id,
         lip_sync_mode=lip_sync_mode,
         narration_audio_url="narration.mp3" if lip_sync_mode == "wav2lip" else None,
+        subject=resolve_subject_key(subject_name or "") or subject_name,
+        chapter_id=chapter_id,
+        artifacts_enabled=artifacts_enabled,
     )
     output_path = lesson_dir / "output.mp4"
     render_remotion(props, lesson_dir, output_path)
@@ -1360,10 +1429,13 @@ def assemble_remotion_props(
     mascot_id="gyanu",
     lip_sync_mode="cartoon_svg",
     narration_audio_url=None,
+    subject=None,
+    chapter_id=None,
+    artifacts_enabled=False,
 ):
     clips = mascot_clips or []
     first_video = next((c.get("video_url") for c in clips if c.get("video_url")), "")
-    return {
+    props = {
         "lesson_title": lesson_title,
         "student_name": student_name or "Rahul",
         "mascot_id": mascot_id,
@@ -1374,13 +1446,24 @@ def assemble_remotion_props(
         "mascot_clips": clips,
         "narration_timeline": narration_timeline,
         "visual_events": visual_events,
+        "artifacts_enabled": bool(artifacts_enabled),
     }
+    if subject:
+        props["subject"] = subject
+    if chapter_id:
+        props["chapter_id"] = chapter_id
+    return props
 
 # ------------------------------------------------------------------------------
 # 6. CHAPTER PROCESSING ENGINE
 # ------------------------------------------------------------------------------
-def build_storyboard_prompt(class_name, student_name):
+def build_storyboard_prompt(class_name, student_name, artifact_catalog=""):
     student = student_name or "Rahul"
+    artifact_block = ""
+    if artifact_catalog and artifact_catalog.strip():
+        artifact_block = f"""
+    {artifact_catalog.strip()}
+    """
     return f"""
     You are the Senior Spatial Storyboard Director for Kriti School's Drona Engine.
     Analyze this ENTIRE PDF chapter and generate micro-lessons for {class_name} students.
@@ -1427,10 +1510,11 @@ def build_storyboard_prompt(class_name, student_name):
       Do NOT merge multiple distinct facts into a single panel's "items"
       list just to keep the panel count low.
     - Set "mascot_pose" per panel to one of: talking, neutral, pointing, happy.
-
+{artifact_block}
     CONTEXTUAL SDXL VISUAL BACKGROUNDS PER PHASE:
-    - Each panel object MUST include its own "bg_prompt" string matching that specific beat concept.
-    - Write photorealistic scene descriptions (e.g., "Photorealistic ancient Satavahana trading ship with two tall wooden masts on a blue ocean, 8k --no text --no people").
+    - Each panel with visual_mode "generated" or "hybrid" MUST include its own "bg_prompt" string matching that beat.
+    - Panels with visual_mode "artifact" should NOT include bg_prompt — the textbook reference image is the hero visual.
+    - Write photorealistic scene descriptions for hybrid/generated beats (e.g., "Photorealistic ancient Satavahana trading ship with two tall wooden masts on a blue ocean, 8k --no text --no people").
 
     CONVERSATIONAL NARRATION MANDATE:
     - Write a warm, friendly, storytelling teacher script speaking directly to the student ({student}).
@@ -1453,7 +1537,17 @@ def build_storyboard_prompt(class_name, student_name):
         {{
           "phase": "Concept",
           "type": "concept_card",
+          "visual_mode": "artifact",
+          "artifact_id": "trade_routes_map",
+          "title": "Concept Title",
+          "items": ["Point 1", "Point 2"],
+          "mascot_pose": "pointing"
+        }},
+        {{
+          "phase": "Concept",
+          "type": "concept_card",
           "bg_prompt": "Vivid SDXL scene description",
+          "visual_mode": "generated",
           "title": "Concept Title",
           "items": ["Point 1", "Point 2"],
           "mascot_pose": "pointing"
@@ -1482,6 +1576,10 @@ def _process_single_lesson(
     force_regen,
     provider,
     label_suffix="",
+    *,
+    class_name=None,
+    subject_name=None,
+    chapter_name=None,
 ):
     if not isinstance(lesson, dict):
         return None
@@ -1529,6 +1627,10 @@ def _process_single_lesson(
         voice=voice,
         student_name=student_name,
         force_regen=force_regen,
+        subject_name=subject_name,
+        class_name=class_name,
+        chapter_name=chapter_name,
+        chapter_output_dir=chapter_output_dir,
     )
     return narration_text
 
@@ -1550,7 +1652,28 @@ def process_chapter_pdf(pdf_path, class_name, subject_name, force_regen=False, p
         print(f"🧹 Force flag detected. Clearing cache for {chapter_name}...")
         os.remove(cache_file)
 
-    prompt = build_storyboard_prompt(class_name, student_name)
+    chapter_id = build_chapter_id(class_name, subject_name, chapter_name)
+    artifacts_on = artifacts_enabled_for_subject(subject_name)
+    chapter_manifest = None
+    artifact_catalog = ""
+    if artifacts_on:
+        chapter_manifest = load_chapter_manifest(
+            chapter_id,
+            chapter_output_dir=chapter_output_dir,
+        )
+        artifact_catalog = format_manifest_for_prompt(chapter_manifest)
+        if chapter_manifest:
+            print(
+                f"   🖼️ Reference images enabled — manifest loaded for {chapter_id} "
+                f"({len(chapter_manifest.get('artifacts', []))} entries)"
+            )
+        else:
+            print(
+                f"   🖼️ Reference images enabled for subject, but no manifest at "
+                f"assets/chapters/{chapter_id}/artifacts/manifest.json"
+            )
+
+    prompt = build_storyboard_prompt(class_name, student_name, artifact_catalog=artifact_catalog)
     lessons = generate_micro_lessons(pdf_path, prompt, provider=provider, cache_file=cache_file)
     lessons = ensure_lesson_list(lessons)
     print(f"🧩 Chapter broken into {len(lessons)} comic micro-lessons.")
@@ -1560,6 +1683,9 @@ def process_chapter_pdf(pdf_path, class_name, subject_name, force_regen=False, p
         narration_text = _process_single_lesson(
             lesson, idx, chapter_output_dir, pdf_text,
             mascot_name, voice, student_name, force_regen, provider,
+            class_name=class_name,
+            subject_name=subject_name,
+            chapter_name=chapter_name,
         )
         if narration_text:
             covered_narrations.append(narration_text)
@@ -1593,6 +1719,9 @@ def process_chapter_pdf(pdf_path, class_name, subject_name, force_regen=False, p
                 gap_lesson, gap_idx, chapter_output_dir, pdf_text,
                 mascot_name, voice, student_name, force_regen, provider,
                 label_suffix=" (Coverage Patch)",
+                class_name=class_name,
+                subject_name=subject_name,
+                chapter_name=chapter_name,
             )
             if narration_text:
                 lessons.append(gap_lesson)

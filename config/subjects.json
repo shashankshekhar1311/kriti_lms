@@ -1,0 +1,33 @@
+{
+  "policy": {
+    "rights_note": "Only include textbook or reference images with cleared usage rights (NCERT/open resources, publisher permission, or teacher-uploaded originals). Curator must approve every manifest entry before production render.",
+    "curator_approval_required": true
+  },
+  "artifacts_enabled": [
+    "social_science",
+    "history",
+    "geography",
+    "civics",
+    "science"
+  ],
+  "artifacts_disabled": [
+    "mathematics",
+    "english_grammar"
+  ],
+  "subject_aliases": {
+    "social_science": "social_science",
+    "social": "social_science",
+    "history": "history",
+    "geography": "geography",
+    "civics": "civics",
+    "political": "civics",
+    "science": "science",
+    "physics": "science",
+    "chemistry": "science",
+    "biology": "science",
+    "mathematics": "mathematics",
+    "math": "mathematics",
+    "ganith": "mathematics",
+    "english_grammar": "english_grammar"
+  }
+}

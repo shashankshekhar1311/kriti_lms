@@ -3,15 +3,20 @@ import {getStaticFiles, staticFile} from 'remotion';
 const isRemoteUrl = (value: string): boolean =>
   /^(https?:|data:|blob:)/i.test(value);
 
-const publicAssetName = (url: string): string => {
+/** Path relative to Remotion public/, preserving subfolders (e.g. artifacts/foo.svg). */
+const publicRelativePath = (url: string): string => {
   const normalized = url.trim().replace(/^file:\/\//i, '').replace(/\\/g, '/');
-  const withoutPublic = normalized.replace(/^public\//, '');
-  if (!withoutPublic) {
+  return normalized.replace(/^public\//, '');
+};
+
+const publicAssetName = (url: string): string => {
+  const relative = publicRelativePath(url);
+  if (!relative) {
     return '';
   }
-  return withoutPublic.includes('/')
-    ? withoutPublic.slice(withoutPublic.lastIndexOf('/') + 1)
-    : withoutPublic;
+  return relative.includes('/')
+    ? relative.slice(relative.lastIndexOf('/') + 1)
+    : relative;
 };
 
 const existsInPublic = (fileName: string): boolean => {
@@ -35,11 +40,11 @@ export const resolveImageSrc = (url: string): string | null => {
     return trimmed;
   }
 
-  const fileName = publicAssetName(trimmed);
-  if (!fileName) {
+  const relativePath = publicRelativePath(trimmed);
+  if (!relativePath) {
     return null;
   }
-  return staticFile(fileName);
+  return staticFile(relativePath);
 };
 
 /**
