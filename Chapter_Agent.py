@@ -132,6 +132,7 @@ from artifact_config import (  # noqa: E402
     resolve_subject_key,
     should_skip_sdxl_for_beat,
 )
+from pdf_artifact_extractor import ensure_chapter_artifacts_from_pdf  # noqa: E402
 
 CUSTOM_TEMP = BASE_DIR / "temp"
 CUSTOM_TEMP.mkdir(exist_ok=True)
@@ -1698,6 +1699,16 @@ def process_chapter_pdf(pdf_path, class_name, subject_name, force_regen=False, p
     chapter_manifest = None
     artifact_catalog = ""
     if artifacts_on:
+        ensure_chapter_artifacts_from_pdf(
+            pdf_path,
+            chapter_id,
+            class_name=class_name,
+            subject_name=subject_name,
+            chapter_name=chapter_name,
+            chapter_output_dir=chapter_output_dir,
+            force=force_regen,
+            provider=provider,
+        )
         chapter_manifest = load_chapter_manifest(
             chapter_id,
             chapter_output_dir=chapter_output_dir,
@@ -1711,7 +1722,8 @@ def process_chapter_pdf(pdf_path, class_name, subject_name, force_regen=False, p
         else:
             print(
                 f"   🖼️ Reference images enabled for subject, but no manifest at "
-                f"assets/chapters/{chapter_id}/artifacts/manifest.json"
+                f"assets/chapters/{chapter_id}/artifacts/manifest.json "
+                f"or {chapter_output_dir / 'artifacts' / 'manifest.json'}"
             )
 
     prompt = build_storyboard_prompt(class_name, student_name, artifact_catalog=artifact_catalog)
