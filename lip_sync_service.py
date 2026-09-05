@@ -49,13 +49,20 @@ from typing import Optional, Sequence
 from urllib.error import URLError
 
 # ------------------------------------------------------------------------------
-# Environment
+# Environment (paths via config.paths — KRITI_TEMP_DIR / LIP_SYNC_MODELS_DIR)
 # ------------------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
-TEMP_DIR = BASE_DIR / "temp"
-TEMP_DIR.mkdir(parents=True, exist_ok=True)
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
-MODELS_DIR = Path(os.getenv("LIP_SYNC_MODELS_DIR", str(BASE_DIR / "models"))).resolve()
+from config import paths as kriti_paths  # noqa: E402
+
+kriti_paths.bootstrap_runtime_paths(create_dirs=True)
+TEMP_DIR = kriti_paths.TEMP_DIR
+MODELS_DIR = kriti_paths.MODELS_DIR
+TEMP_DIR.mkdir(parents=True, exist_ok=True)
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
 WAV2LIP_DIR = Path(os.getenv("WAV2LIP_ROOT", str(MODELS_DIR / "Wav2Lip"))).resolve()
 LIVEPORTRAIT_DIR = Path(os.getenv("LIVEPORTRAIT_ROOT", str(MODELS_DIR / "LivePortrait"))).resolve()
 

@@ -1,6 +1,7 @@
 # Environment & Secrets (NEVER push API keys)
 .env
 *.env
+!.env.example
 
 # Dependencies
 node_modules/
@@ -14,7 +15,33 @@ Rendered_Output/
 temp/
 *.mp4
 *.mp3
+*.webm
+
+# Local / volume model weights & checkouts (large; keep on persistent storage)
+models/
+*.pth
+*.onnx
+*.pt
+*.ckpt
+*.safetensors
+
+# Library caches if ever created inside the repo tree
+.cache/
+caches/
+huggingface/
+u2net/
 
 # OS Files
 .DS_Store
 Thumbs.db
+
+# SSH / credentials that must never be committed
+**/.ssh/
+*.pem
+*.ppk
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+id_ecdsa
+id_ecdsa.pub

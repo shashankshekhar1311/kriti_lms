@@ -46,11 +46,36 @@ import asyncio
 import subprocess
 import tempfile
 from pathlib import Path
-from dotenv import load_dotenv
 
 warnings.filterwarnings("ignore")
 
-# Dynamic Image Generation Import
+# ------------------------------------------------------------------------------
+# 1. ENVIRONMENT & PATH SETUP (before torch / rembg so HF_HOME / U2NET_HOME apply)
+# ------------------------------------------------------------------------------
+BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
+from config.paths import (  # noqa: E402
+    ASSETS_DIR,
+    REMOTION_DIR,
+    REMOTION_PUBLIC_DIR,
+    RENDERED_OUTPUT_DIR,
+    SOURCE_BOOKS_DIR,
+    TEMP_DIR,
+    bootstrap_runtime_paths,
+)
+
+# Re-apply after sys.path is ready (idempotent; respects KRITI_* / cache env vars)
+bootstrap_runtime_paths(create_dirs=True)
+
+# Legacy aliases used elsewhere in this module
+CUSTOM_TEMP = TEMP_DIR
+os.environ["TEMP"] = str(TEMP_DIR)
+os.environ["TMP"] = str(TEMP_DIR)
+tempfile.tempdir = str(TEMP_DIR)
+
+# Dynamic Image Generation Import (after cache env is applied)
 try:
     import torch
     from diffusers import AutoPipelineForText2Image
@@ -98,17 +123,6 @@ try:
 except ImportError:
     edge_tts = None
 
-# ------------------------------------------------------------------------------
-# 1. ENVIRONMENT & PATH SETUP
-# ------------------------------------------------------------------------------
-BASE_DIR = Path(__file__).resolve().parent
-ENV_PATH = BASE_DIR / ".env"
-
-load_dotenv(dotenv_path=ENV_PATH)
-
-if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
-
 from lip_sync_service import (  # noqa: E402
     VALID_POSES,
     generate_talking_mascot,
@@ -133,18 +147,6 @@ from artifact_config import (  # noqa: E402
     should_skip_sdxl_for_beat,
 )
 from pdf_artifact_extractor import ensure_chapter_artifacts_from_pdf  # noqa: E402
-
-CUSTOM_TEMP = BASE_DIR / "temp"
-CUSTOM_TEMP.mkdir(exist_ok=True)
-os.environ["TEMP"] = str(CUSTOM_TEMP)
-os.environ["TMP"] = str(CUSTOM_TEMP)
-tempfile.tempdir = str(CUSTOM_TEMP)
-
-SOURCE_BOOKS_DIR = BASE_DIR / "Source_Books"
-RENDERED_OUTPUT_DIR = BASE_DIR / "Rendered_Output"
-ASSETS_DIR = BASE_DIR / "assets" / "mascots"
-REMOTION_DIR = BASE_DIR / "remotion"
-REMOTION_PUBLIC_DIR = REMOTION_DIR / "public"
 
 MASCOT_VOICES = {
     "gyanu": "en-US-AndrewMultilingualNeural",
