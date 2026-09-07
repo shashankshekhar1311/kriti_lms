@@ -15,7 +15,23 @@ from dataclasses import dataclass
 class ComputeConfig:
     provider: str = "runpod"
     runpod_pod_id: str | None = None
+    runpod_api_base_url: str = "https://rest.runpod.io/v1"
+    runpod_request_timeout_seconds: float = 30.0
+    runpod_poll_interval_seconds: float = 5.0
     worker_hostname: str = "kriti-runpod"
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be numeric, got {raw!r}") from exc
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0")
+    return value
 
 
 def load_compute_config() -> ComputeConfig:
@@ -23,5 +39,14 @@ def load_compute_config() -> ComputeConfig:
     return ComputeConfig(
         provider=(os.getenv("KRITI_COMPUTE_PROVIDER") or "runpod").strip().lower(),
         runpod_pod_id=(os.getenv("KRITI_RUNPOD_POD_ID") or "").strip() or None,
+        runpod_api_base_url=(
+            os.getenv("KRITI_RUNPOD_API_BASE_URL") or "https://rest.runpod.io/v1"
+        ).strip(),
+        runpod_request_timeout_seconds=_env_float(
+            "KRITI_RUNPOD_REQUEST_TIMEOUT_SECONDS", 30.0
+        ),
+        runpod_poll_interval_seconds=_env_float(
+            "KRITI_RUNPOD_POLL_INTERVAL_SECONDS", 5.0
+        ),
         worker_hostname=(os.getenv("KRITI_WORKER_HOSTNAME") or "kriti-runpod").strip(),
     )
