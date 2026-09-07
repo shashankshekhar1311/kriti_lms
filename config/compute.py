@@ -20,6 +20,16 @@ class ComputeConfig:
     runpod_poll_interval_seconds: float = 5.0
     runpod_capacity_retry_timeout_seconds: float = 180.0
     runpod_capacity_retry_interval_seconds: float = 15.0
+    runpod_network_volume_id: str | None = None
+    runpod_network_volume_name: str = "kriti-workspace"
+    runpod_network_volume_size_gb: int = 100
+    runpod_network_volume_data_center_id: str | None = None
+    runpod_disposable_template_id: str | None = None
+    runpod_disposable_image_name: str | None = None
+    runpod_disposable_gpu_type_ids: tuple[str, ...] = ()
+    runpod_disposable_gpu_count: int = 1
+    runpod_disposable_name_prefix: str = "kriti-worker"
+    runpod_disposable_container_disk_gb: int = 50
     worker_hostname: str = "kriti-runpod"
     worker_repo_path: str = "/workspace/kriti_lms"
     git_remote_url: str = "https://github.com/shashankshekhar1311/kriti_lms.git"
@@ -44,6 +54,23 @@ def _env_float(name: str, default: float) -> float:
     return value
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0")
+    return value
+
+
+def _env_csv(name: str) -> tuple[str, ...]:
+    return tuple(part.strip() for part in (os.getenv(name) or "").split(",") if part.strip())
+
+
 def load_compute_config() -> ComputeConfig:
     """Load provider-neutral, non-secret compute settings from the environment."""
     return ComputeConfig(
@@ -63,6 +90,22 @@ def load_compute_config() -> ComputeConfig:
         ),
         runpod_capacity_retry_interval_seconds=_env_float(
             "KRITI_RUNPOD_CAPACITY_RETRY_INTERVAL_SECONDS", 15.0
+        ),
+        runpod_network_volume_id=(os.getenv("KRITI_RUNPOD_NETWORK_VOLUME_ID") or "").strip() or None,
+        runpod_network_volume_name=(os.getenv("KRITI_RUNPOD_NETWORK_VOLUME_NAME") or "kriti-workspace").strip(),
+        runpod_network_volume_size_gb=_env_int("KRITI_RUNPOD_NETWORK_VOLUME_SIZE_GB", 100),
+        runpod_network_volume_data_center_id=(
+            os.getenv("KRITI_RUNPOD_NETWORK_VOLUME_DATA_CENTER_ID") or ""
+        ).strip() or None,
+        runpod_disposable_template_id=(os.getenv("KRITI_RUNPOD_DISPOSABLE_TEMPLATE_ID") or "").strip() or None,
+        runpod_disposable_image_name=(os.getenv("KRITI_RUNPOD_DISPOSABLE_IMAGE_NAME") or "").strip() or None,
+        runpod_disposable_gpu_type_ids=_env_csv("KRITI_RUNPOD_DISPOSABLE_GPU_TYPE_IDS"),
+        runpod_disposable_gpu_count=_env_int("KRITI_RUNPOD_DISPOSABLE_GPU_COUNT", 1),
+        runpod_disposable_name_prefix=(
+            os.getenv("KRITI_RUNPOD_DISPOSABLE_NAME_PREFIX") or "kriti-worker"
+        ).strip(),
+        runpod_disposable_container_disk_gb=_env_int(
+            "KRITI_RUNPOD_DISPOSABLE_CONTAINER_DISK_GB", 50
         ),
         worker_hostname=(os.getenv("KRITI_WORKER_HOSTNAME") or "kriti-runpod").strip(),
         worker_repo_path=(os.getenv("KRITI_WORKER_REPO_PATH") or "/workspace/kriti_lms").strip(),
