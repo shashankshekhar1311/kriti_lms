@@ -13,6 +13,10 @@ class WorkerStartError(ComputeError):
     """Raised when a worker cannot be started."""
 
 
+class RunPodCapacityUnavailableError(WorkerStartError):
+    """Raised when the Pod's bound RunPod host has no GPU capacity available."""
+
+
 class WorkerStopError(ComputeError):
     """Raised when a worker cannot be stopped."""
 
