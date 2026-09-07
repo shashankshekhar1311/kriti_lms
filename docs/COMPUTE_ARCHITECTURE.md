@@ -9,14 +9,20 @@ and from the existing rendering/business logic.
 ## Current architecture
 
 ```text
-ComputeProvider
-    -> RunPodProvider (REST API v1 lifecycle implemented)
-
-RunPod worker bootstrap
-    -> Tailscale userspace daemon + persistent node state implemented
-
-WorkerTransport
-    -> TailscaleTransport (remote execution/download still placeholder)
+Windows control plane
+    |
+    +--> RunPodProvider (REST API v1 lifecycle)
+    |
+    +--> TailscaleTransport (`tailscale ssh`)
+              |
+              +--> RunPod worker bootstrap
+              |      -> userspace tailscaled
+              |      -> persistent state under /workspace/tailscale
+              |      -> Tailscale SSH enabled
+              |
+              +--> remote command execution
+              +--> command-level health check
+              +--> non-destructive single-file download
 
 Existing rendering pipeline
     -> unchanged
@@ -31,8 +37,8 @@ A compute provider owns only worker lifecycle:
 - report provider-neutral status
 - wait until the provider control plane reports the worker as running
 
-It does not own SSH/Tailscale, file transfer, rendering, lesson orchestration,
-or artifact validation.
+It does not own Tailscale, file transfer, rendering, lesson orchestration, or
+artifact validation.
 
 ### WorkerTransport responsibilities
 
@@ -42,8 +48,8 @@ A transport owns communication with an already provisioned worker:
 - remote command execution
 - non-destructive artifact download
 
-Transport is kept separate so a RunPod worker can later use either public SSH
-or Tailscale without changing rendering code.
+Transport is separate from provisioning so later compute backends can reuse or
+replace the control channel without changing rendering/business logic.
 
 ## Slice 1 — provider-neutral foundation
 
@@ -59,35 +65,58 @@ generation, or the existing manual RunPod workflow.
 - `POST /pods/{podId}/start` to start/resume
 - `POST /pods/{podId}/stop` to stop
 
-The implementation is intentionally idempotent from Kriti's perspective:
-starting an already-running Pod and stopping an already-stopped Pod are no-ops.
-A terminated Pod is never resumed.
+Starting an already-running Pod and stopping an already-stopped Pod are no-ops.
+A terminated Pod is never resumed. `wait_until_ready()` proves only RunPod
+control-plane state, not application readiness.
 
-`wait_until_ready()` polls RunPod until `desiredStatus=RUNNING`. This is only a
-**control-plane readiness check**. It does not prove that Tailscale/SSH, CUDA,
-Python dependencies, models, or the Kriti pipeline are ready.
-
-## Slice 2B — Tailscale RunPod bootstrap
+## Slice 2B — Tailscale worker bootstrap
 
 `scripts/bootstrap_tailscale.sh` prepares the private worker network after a
-RunPod container starts. It reflects the actual Kriti RunPod environment already
-validated manually:
+RunPod container starts. The live RunPod environment established these design
+constraints:
 
 - no `systemd` dependency;
 - no `/dev/net/tun` dependency;
 - `tailscaled --tun=userspace-networking`;
-- persistent node state under `/workspace/tailscale` by default;
-- optional migration from `/var/lib/tailscale/tailscaled.state`;
-- reuse of an already-running daemon and authenticated node;
-- first-time enrollment through runtime `TAILSCALE_AUTH_KEY`;
-- auth key is never printed by the bootstrap script.
+- persistent node state under `/workspace/tailscale`;
+- automatic Tailscale installation on fresh containers when allowed;
+- `NeedsLogin` is treated as a live daemon state rather than a startup failure;
+- first enrollment uses runtime `TAILSCALE_AUTH_KEY`;
+- Tailscale SSH is enabled automatically.
 
-A successful bootstrap means the daemon is reachable and the worker has a
-Tailscale IPv4 address. It intentionally does **not** claim that ordinary
-OpenSSH/SCP works through Tailscale userspace networking. That transport must be
-validated before `TailscaleTransport` is wired for command execution/downloads.
+The live test also established that conventional TCP/22 was not reachable and no
+normal `sshd` listener was present, while `tailscale ssh root@<worker>` succeeded
+from Windows. Tailscale SSH is therefore the intended private control path.
 
-See `docs/TAILSCALE_RUNPOD.md` for operational details.
+See `docs/TAILSCALE_RUNPOD.md` for bootstrap details.
+
+## Slice 2C — TailscaleTransport
+
+`compute/transport/tailscale.py` implements `WorkerTransport` using the Tailscale
+CLI installed on the Windows control machine.
+
+`health_check()` runs a small non-interactive command through `tailscale ssh` and
+returns true only when the remote marker is received. This proves the actual
+command path, not merely that a Tailscale node appears in `tailscale status`.
+
+`execute(command)` invokes:
+
+```text
+tailscale ssh <user>@<worker-hostname> <command>
+```
+
+and returns stdout. A non-zero remote exit or timeout raises a transport-specific
+exception.
+
+`download(remote_path, local_path)` deliberately does not use SCP. It streams one
+remote file with `cat` through Tailscale SSH into a local `.part` file and atomically
+renames it after a successful transfer. The remote source is never deleted.
+Directory/multi-file artifact synchronization remains an orchestration/artifact
+slice rather than being hidden inside this primitive transport operation.
+
+The transport addresses the worker by hostname, not by a historical 100.x IP.
+Stale Tailscale device entries should be removed so the active worker can use the
+canonical `KRITI_WORKER_HOSTNAME=kriti-runpod` identity.
 
 ## Configuration
 
@@ -100,39 +129,34 @@ RunPod lifecycle settings are read through `config/compute.py`:
 - `KRITI_RUNPOD_POLL_INTERVAL_SECONDS`
 - `KRITI_WORKER_HOSTNAME`
 
-The RunPod credential is read from `RUNPOD_API_KEY` at runtime.
+Tailscale transport settings on the Windows control machine are:
 
-Tailscale bootstrap settings include:
+- `KRITI_TAILSCALE_SSH_USER` (default `root`)
+- `KRITI_TAILSCALE_COMMAND_TIMEOUT_SECONDS` (default `60`)
+- `KRITI_TAILSCALE_HEALTH_TIMEOUT_SECONDS` (default `15`)
 
-- `TAILSCALE_AUTH_KEY` (secret; runtime only)
-- `KRITI_TAILSCALE_STATE_DIR`
-- `KRITI_TAILSCALE_STATE_FILE`
-- `KRITI_TAILSCALE_RUNTIME_DIR`
-- `KRITI_TAILSCALE_SOCKET`
-- `KRITI_TAILSCALE_LOG`
-- `KRITI_TAILSCALE_START_TIMEOUT_SECONDS`
-- `KRITI_TAILSCALE_LEGACY_STATE_FILE`
-- `KRITI_WORKER_HOSTNAME`
+The Windows control machine must have the Tailscale CLI installed, be logged into
+the same tailnet, and be allowed by Tailscale SSH policy.
 
-Secrets must remain in environment/secret management and must never be committed.
+The RunPod credential is read from `RUNPOD_API_KEY` at runtime. `TAILSCALE_AUTH_KEY`
+is a worker-side enrollment secret and should remain in RunPod Secrets/runtime
+environment rather than Git.
 
 ## Tests
 
-`test_runpod_provider.py` tests lifecycle behavior entirely with mocked RunPod API
-responses.
+- `test_runpod_provider.py`: mocked RunPod lifecycle tests.
+- `test_tailscale_bootstrap.py`: isolated bootstrap tests with fake Tailscale binaries.
+- `test_tailscale_transport.py`: isolated subprocess tests for health, command
+  execution, failures/timeouts, binary download, atomic rename, and configuration.
 
-`test_tailscale_bootstrap.py` executes the real bootstrap script against fake
-`tailscale` and `tailscaled` binaries in temporary directories. It does not use
-the network, contact Tailscale, or start a RunPod pod. It covers first enrollment,
-idempotent restart, missing-auth-key failure, persistent-state arguments, secret
-redaction from output, and legacy-state migration.
+None of these tests starts a RunPod GPU or contacts the real tailnet.
 
 ## Planned next slices
 
-1. Validate worker transport on a short-lived RunPod integration test (Tailscale
-   ping plus TCP/SSH reachability) and only then implement command/download
-   transport.
-2. Add a Windows-side orchestrator/CLI around the existing chapter pipeline.
-3. Add commit-SHA sync, transport health, and existing RunPod preflight wiring.
-4. Add artifact verification and failure-safe shutdown with optional
+1. Build a Windows-side orchestrator/CLI that composes `RunPodProvider` and
+   `TailscaleTransport`.
+2. Add exact Git commit synchronization plus existing `runpod_preflight.sh` wiring.
+3. Add artifact-set verification/checksums and failure-safe shutdown with optional
    keep-worker-on-failure behavior.
+4. Wire the orchestrator to the existing chapter/render pipeline without changing
+   lesson-generation semantics.

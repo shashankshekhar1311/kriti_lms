@@ -5,5 +5,6 @@ Tailscale/SSH decisions do not leak into provider or rendering code.
 """
 
 from .base import WorkerTransport
+from .tailscale import TailscaleTransport, TailscaleTransportConfig
 
-__all__ = ["WorkerTransport"]
+__all__ = ["WorkerTransport", "TailscaleTransport", "TailscaleTransportConfig"]

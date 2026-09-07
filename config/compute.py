@@ -19,6 +19,9 @@ class ComputeConfig:
     runpod_request_timeout_seconds: float = 30.0
     runpod_poll_interval_seconds: float = 5.0
     worker_hostname: str = "kriti-runpod"
+    tailscale_ssh_user: str = "root"
+    tailscale_command_timeout_seconds: float = 60.0
+    tailscale_health_timeout_seconds: float = 15.0
 
 
 def _env_float(name: str, default: float) -> float:
@@ -49,4 +52,11 @@ def load_compute_config() -> ComputeConfig:
             "KRITI_RUNPOD_POLL_INTERVAL_SECONDS", 5.0
         ),
         worker_hostname=(os.getenv("KRITI_WORKER_HOSTNAME") or "kriti-runpod").strip(),
+        tailscale_ssh_user=(os.getenv("KRITI_TAILSCALE_SSH_USER") or "root").strip(),
+        tailscale_command_timeout_seconds=_env_float(
+            "KRITI_TAILSCALE_COMMAND_TIMEOUT_SECONDS", 60.0
+        ),
+        tailscale_health_timeout_seconds=_env_float(
+            "KRITI_TAILSCALE_HEALTH_TIMEOUT_SECONDS", 15.0
+        ),
     )
