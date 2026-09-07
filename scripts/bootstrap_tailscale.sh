@@ -79,20 +79,25 @@ fi
 
 TS=("$TAILSCALE_BIN" "--socket=${SOCKET}")
 
-daemon_process_alive() {
+daemon_reachable() {
+    # The control socket is created before authentication. It is therefore a
+    # better readiness signal than `tailscale status`, which can exit non-zero
+    # while the daemon is healthy but in NeedsLogin state.
+    [[ -S "$SOCKET" || -e "$SOCKET" ]] || return 1
+
+    # If this bootstrap launched the daemon, also ensure that process still
+    # exists. For a daemon started outside this script there may be no PID file;
+    # in that case the socket itself is the compatibility signal.
     if [[ -f "$PID_FILE" ]]; then
         local pid
         pid="$(cat "$PID_FILE" 2>/dev/null || true)"
-        [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && return 0
+        [[ -n "$pid" ]] || return 1
+        kill -0 "$pid" 2>/dev/null || return 1
     fi
-
-    # A unix socket is created by tailscaled before authentication. This is the
-    # key distinction from the old status-based readiness check: `tailscale
-    # status` can return non-zero while the daemon is healthy but NeedsLogin.
-    [[ -S "$SOCKET" || -e "$SOCKET" ]]
+    return 0
 }
 
-if daemon_process_alive; then
+if daemon_reachable; then
     log "tailscaled is already reachable; reusing existing daemon"
 else
     rm -f "$SOCKET" "$PID_FILE" 2>/dev/null || true
@@ -106,7 +111,7 @@ else
     printf '%s\n' "$daemon_pid" > "$PID_FILE"
 
     deadline=$((SECONDS + START_TIMEOUT_SECONDS))
-    until daemon_process_alive; do
+    until daemon_reachable; do
         if ! kill -0 "$daemon_pid" 2>/dev/null; then
             tail -n 30 "$LOG_FILE" 2>/dev/null || true
             fail "tailscaled exited before creating its control socket"
