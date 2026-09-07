@@ -8,8 +8,20 @@
 
 ## After starting the RunPod pod
 
-This is a **read-only readiness check**. It does **not** start or stop the
-RunPod pod, install packages, download models, or run `Chapter_Agent.py`.
+Bootstrap Tailscale first so the worker rejoins the private Kriti control network:
+
+```bash
+cd /workspace/kriti_lms
+bash scripts/bootstrap_tailscale.sh
+```
+
+The script is idempotent, runs `tailscaled` manually in userspace-networking mode,
+keeps node state under `/workspace/tailscale` by default, and only requires
+`TAILSCALE_AUTH_KEY` for first enrollment or if persistent state is lost. See
+**[TAILSCALE_RUNPOD.md](./TAILSCALE_RUNPOD.md)**.
+
+Then run the existing **read-only readiness check**. It does **not** start or stop
+the RunPod pod, install packages, download models, or run `Chapter_Agent.py`.
 
 ```bash
 cd /workspace/kriti_lms
@@ -31,10 +43,15 @@ keys, and troubleshooting.
 Typical loop:
 
 1. Start the RunPod pod  
-2. Preflight + render on the pod  
-3. On Windows: `.\scripts\download_runpod_outputs.ps1 -Host "<HOST>" -Port <PORT>`  
-4. Verify videos locally  
-5. Stop the pod to save GPU cost  
+2. Bootstrap Tailscale  
+3. Preflight + render on the pod  
+4. On Windows: `.\scripts\download_runpod_outputs.ps1 -Host "<HOST>" -Port <PORT>`  
+5. Verify videos locally  
+6. Stop the pod to save GPU cost  
+
+The current downloader still uses OpenSSH/SCP. Tailscale-level connectivity is
+separate from proving TCP/SSH transport through userspace networking; that
+transport validation remains a later step.
 
 Default remote tree: `/workspace/kriti_lms/Rendered_Output`  
 Default local tree: `E:\Kriti\Rendered_Output` (configurable)
@@ -44,6 +61,8 @@ Default local tree: `E:\Kriti\Rendered_Output` (configurable)
 ```text
 /workspace/
   kriti_lms/                 # git clone (this repository)
+  tailscale/
+    tailscaled.state         # persistent Tailscale node identity
   caches/
     huggingface/             # HF_HOME
     torch/                   # TORCH_HOME
@@ -77,7 +96,8 @@ U2NET_HOME=/workspace/caches/rembg
 LIP_SYNC_MODELS_DIR=/workspace/models/lipsync
 ```
 
-Also set `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` as needed.
+Also set `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` as needed. Keep `RUNPOD_API_KEY`
+and `TAILSCALE_AUTH_KEY` in runtime secret storage rather than committed files.
 
 ## Backward compatibility
 
@@ -102,22 +122,7 @@ Central module: `config/paths.py`.
 Imported early by `Chapter_Agent.py` (before torch/rembg) and by
 `lip_sync_service.py` so cache environment variables take effect.
 
-## What this slice does / does not do
-
-Does:
-
-- Env overrides for data + cache paths
-- Safe directory creation
-- `.env.example` + this layout doc
-
-Does not (later slices):
-
-- Install GPU Python packages → see [RUNPOD_ENV.md](./RUNPOD_ENV.md) (Slice 2)
-- Download SDXL / Wav2Lip weights
-- Rewrite Dockerfile
-- Change storyboard / Remotion / generation behavior
-
-## Activate GPU environment (after Slice 2)
+## Activate GPU environment
 
 ```bash
 source /workspace/kriti_lms/scripts/activate_runpod.sh
