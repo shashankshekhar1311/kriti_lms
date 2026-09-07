@@ -1,0 +1,21 @@
+"""Exceptions raised by Kriti compute-provider integrations."""
+
+
+class ComputeError(RuntimeError):
+    """Base exception for compute lifecycle failures."""
+
+
+class ComputeConfigurationError(ComputeError):
+    """Raised when provider configuration is missing or invalid."""
+
+
+class WorkerStartError(ComputeError):
+    """Raised when a worker cannot be started."""
+
+
+class WorkerStopError(ComputeError):
+    """Raised when a worker cannot be stopped."""
+
+
+class WorkerReadinessTimeout(ComputeError):
+    """Raised when a worker does not become ready within the requested timeout."""
