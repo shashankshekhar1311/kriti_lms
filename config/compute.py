@@ -18,6 +18,8 @@ class ComputeConfig:
     runpod_api_base_url: str = "https://rest.runpod.io/v1"
     runpod_request_timeout_seconds: float = 30.0
     runpod_poll_interval_seconds: float = 5.0
+    runpod_capacity_retry_timeout_seconds: float = 180.0
+    runpod_capacity_retry_interval_seconds: float = 15.0
     worker_hostname: str = "kriti-runpod"
     worker_repo_path: str = "/workspace/kriti_lms"
     git_remote_url: str = "https://github.com/shashankshekhar1311/kriti_lms.git"
@@ -55,6 +57,12 @@ def load_compute_config() -> ComputeConfig:
         ),
         runpod_poll_interval_seconds=_env_float(
             "KRITI_RUNPOD_POLL_INTERVAL_SECONDS", 5.0
+        ),
+        runpod_capacity_retry_timeout_seconds=_env_float(
+            "KRITI_RUNPOD_CAPACITY_RETRY_TIMEOUT_SECONDS", 180.0
+        ),
+        runpod_capacity_retry_interval_seconds=_env_float(
+            "KRITI_RUNPOD_CAPACITY_RETRY_INTERVAL_SECONDS", 15.0
         ),
         worker_hostname=(os.getenv("KRITI_WORKER_HOSTNAME") or "kriti-runpod").strip(),
         worker_repo_path=(os.getenv("KRITI_WORKER_REPO_PATH") or "/workspace/kriti_lms").strip(),

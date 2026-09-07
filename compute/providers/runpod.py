@@ -22,6 +22,7 @@ from urllib.request import Request, urlopen
 from ..exceptions import (
     ComputeConfigurationError,
     ComputeError,
+    RunPodCapacityUnavailableError,
     WorkerReadinessTimeout,
     WorkerStartError,
     WorkerStopError,
@@ -33,6 +34,14 @@ from ..provider import ComputeProvider
 JsonMapping = Mapping[str, Any]
 RequestFn = Callable[[str, str], JsonMapping]
 
+_CAPACITY_ERROR_MARKERS = (
+    "not enough free gpus",
+    "gpu is no longer available",
+    "gpus are no longer available",
+    "zero gpu",
+    "zero gpus",
+)
+
 
 @dataclass(frozen=True)
 class RunPodProviderConfig:
@@ -43,6 +52,8 @@ class RunPodProviderConfig:
     worker_hostname: str = "kriti-runpod"
     request_timeout_seconds: float = 30.0
     poll_interval_seconds: float = 5.0
+    capacity_retry_timeout_seconds: float = 180.0
+    capacity_retry_interval_seconds: float = 15.0
 
 
 class RunPodProvider(ComputeProvider):
@@ -150,6 +161,11 @@ class RunPodProvider(ComputeProvider):
     def _desired_status(payload: JsonMapping) -> str:
         return str(payload.get("desiredStatus") or "").strip().upper()
 
+    @staticmethod
+    def _is_capacity_error(exc: BaseException) -> bool:
+        text = str(exc).lower()
+        return any(marker in text for marker in _CAPACITY_ERROR_MARKERS)
+
     @classmethod
     def _state_from_payload(cls, payload: JsonMapping) -> WorkerState:
         desired = cls._desired_status(payload)
@@ -186,8 +202,38 @@ class RunPodProvider(ComputeProvider):
             raise ComputeError("RunPod API returned no pod data")
         return payload
 
+    def _start_with_capacity_retry(self) -> None:
+        timeout = max(0.0, self.config.capacity_retry_timeout_seconds)
+        interval = max(0.0, self.config.capacity_retry_interval_seconds)
+        deadline = self._monotonic() + timeout
+        attempts = 0
+        last_error: BaseException | None = None
+
+        while True:
+            attempts += 1
+            try:
+                self._request_fn("POST", self._pod_path("/start"))
+                return
+            except ComputeError as exc:
+                if not self._is_capacity_error(exc):
+                    raise
+                last_error = exc
+
+            if timeout <= 0 or self._monotonic() >= deadline:
+                pod_id = self._require_pod_id()
+                raise RunPodCapacityUnavailableError(
+                    f"RunPod pod {pod_id} is still bound to a host with no free GPU after "
+                    f"{attempts} start attempt(s). RunPod stopped Pods release their GPU, so "
+                    "the original machine may be occupied. Use RunPod's automatic Pod migration "
+                    "when available, or redeploy on available GPU capacity. For a durable Kriti "
+                    "architecture, keep /workspace on a RunPod network volume so a replacement "
+                    "Pod can attach the same data."
+                ) from last_error
+
+            self._sleep(interval)
+
     def start(self) -> WorkerInfo:
-        """Start/resume the configured pod, or return immediately if already running."""
+        """Start/resume the configured pod, retrying temporary host-capacity failures."""
         try:
             current = self._get_pod()
             desired = self._desired_status(current)
@@ -198,9 +244,9 @@ class RunPodProvider(ComputeProvider):
             if desired == "RUNNING":
                 return self._worker_info(current)
 
-            self._request_fn("POST", self._pod_path("/start"))
+            self._start_with_capacity_retry()
             return self._worker_info(self._get_pod())
-        except (ComputeConfigurationError, WorkerStartError):
+        except (ComputeConfigurationError, RunPodCapacityUnavailableError, WorkerStartError):
             raise
         except ComputeError as exc:
             raise WorkerStartError(

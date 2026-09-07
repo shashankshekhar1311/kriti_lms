@@ -86,6 +86,8 @@ def _run_preflight(args: argparse.Namespace) -> int:
             worker_hostname=config.worker_hostname,
             request_timeout_seconds=config.runpod_request_timeout_seconds,
             poll_interval_seconds=config.runpod_poll_interval_seconds,
+            capacity_retry_timeout_seconds=config.runpod_capacity_retry_timeout_seconds,
+            capacity_retry_interval_seconds=config.runpod_capacity_retry_interval_seconds,
         )
     )
     transport = TailscaleTransport(
@@ -111,6 +113,12 @@ def _run_preflight(args: argparse.Namespace) -> int:
 
     print(f"Kriti preflight commit: {commit}")
     print(f"Worker target: {config.tailscale_ssh_user}@{config.worker_hostname}")
+    if not args.existing_worker and config.runpod_capacity_retry_timeout_seconds > 0:
+        print(
+            "RunPod capacity retry: "
+            f"up to {config.runpod_capacity_retry_timeout_seconds:g}s "
+            f"every {config.runpod_capacity_retry_interval_seconds:g}s"
+        )
     if args.keep_worker_on_failure:
         print("WARNING: --keep-worker-on-failure can leave billable GPU compute running.")
 
