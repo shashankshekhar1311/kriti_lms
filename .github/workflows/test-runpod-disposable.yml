@@ -1,0 +1,30 @@
+name: Test RunPod disposable workers
+
+on:
+  pull_request:
+    paths:
+      - "compute/providers/runpod_api.py"
+      - "compute/providers/runpod_disposable.py"
+      - "compute/providers/runpod_storage.py"
+      - "compute/providers/__init__.py"
+      - "compute/cli.py"
+      - "config/compute.py"
+      - "test_runpod_disposable.py"
+      - ".github/workflows/test-runpod-disposable.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run disposable worker tests
+        run: python test_runpod_disposable.py
+
+      - name: Check CLI help
+        run: |
+          python -m compute.cli --help
+          python -m compute.cli preflight --help
+          python -m compute.cli volume --help
