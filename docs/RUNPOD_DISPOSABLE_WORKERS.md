@@ -115,6 +115,25 @@ workflow. It is not used as the disposable worker's runtime destination.
 is used, but a template is preferred for Kriti because the worker also needs
 Tailscale/secret/startup configuration.
 
+### Disposable template identity rule
+
+When the disposable RunPod template is created, **do not copy these fixed-worker
+environment variables into it**:
+
+```text
+KRITI_WORKER_HOSTNAME
+KRITI_TAILSCALE_STATE_DIR=/workspace/tailscale
+KRITI_TAILSCALE_STATE_FILE=/workspace/tailscale/tailscaled.state
+```
+
+The bootstrap intentionally detects disposable mode only when an explicit
+`KRITI_WORKER_HOSTNAME` is absent and `RUNPOD_POD_ID` is present. It then derives
+the unique runtime hostname and selects ephemeral Tailscale state automatically.
+
+The template should still contain the RunPod Secret reference for
+`TAILSCALE_AUTH_KEY` plus the ordinary Tailscale/bootstrap settings that do not pin
+a machine identity.
+
 The provider sends RunPod:
 
 ```text
@@ -195,6 +214,10 @@ RunPod Secret rather than embedding the key. Disposable workers authenticate on
 each new Pod because their node state is ephemeral. A reusable tagged/pre-approved
 key can support this model; an ephemeral Tailscale auth key is also appropriate for
 short-lived container workloads when operationally convenient.
+
+Using a Tailscale auth key configured for ephemeral nodes is preferred for the
+final disposable-worker template because stale device records are then cleaned up
+more naturally after a Pod is deleted.
 
 ## Scope boundary
 
