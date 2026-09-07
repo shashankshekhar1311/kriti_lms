@@ -1,13 +1,4 @@
-"""Command-line entry point for Kriti compute orchestration.
-
-Run from the Windows repository root with:
-
-    python -m compute.cli preflight
-
-The command loads .env locally, resolves the exact local Git HEAD, starts the
-configured RunPod, waits for Tailscale SSH, synchronizes that exact commit,
-runs the existing RunPod preflight, and stops the worker in a finally block.
-"""
+"""Command-line entry point for Kriti compute orchestration."""
 
 from __future__ import annotations
 
@@ -20,6 +11,9 @@ from config.compute import load_compute_config
 from config.env import load_env_file
 from .orchestrator import PreflightOrchestrator, PreflightRequest
 from .providers.runpod import RunPodProvider, RunPodProviderConfig
+from .providers.runpod_api import RunPodApiClient, RunPodApiConfig
+from .providers.runpod_disposable import RunPodDisposableConfig, RunPodDisposableProvider
+from .providers.runpod_storage import RunPodNetworkVolumeClient, RunPodNetworkVolumeConfig
 from .transport.tailscale import TailscaleTransport, TailscaleTransportConfig
 
 
@@ -61,25 +55,53 @@ def _build_parser() -> argparse.ArgumentParser:
     preflight = sub.add_parser("preflight", help="Start worker, sync exact commit, run preflight, stop")
     preflight.add_argument("--commit", help="Exact Git commit; defaults to local HEAD")
     preflight.add_argument("--allow-dirty-local", action="store_true")
+    preflight.add_argument("--keep-worker-on-failure", action="store_true")
+    preflight.add_argument("--existing-worker", action="store_true")
     preflight.add_argument(
-        "--keep-worker-on-failure",
+        "--disposable-worker",
         action="store_true",
-        help="Debug only: do not stop a worker after a failed preflight",
+        help="Provision a fresh GPU Pod attached to KRITI_RUNPOD_NETWORK_VOLUME_ID and delete it afterward",
     )
-    preflight.add_argument(
-        "--existing-worker",
+
+    volume = sub.add_parser("volume", help="Manage Kriti RunPod network volume")
+    volume_sub = volume.add_subparsers(dest="volume_command", required=True)
+    create = volume_sub.add_parser("create", help="Create the configured RunPod network volume")
+    create.add_argument(
+        "--confirm-create",
         action="store_true",
-        help="Do not start/stop RunPod; use an already-running, Tailscale-ready worker",
+        help="Required because network volumes incur ongoing storage charges",
     )
+    show = volume_sub.add_parser("show", help="Show the configured network volume")
+    show.add_argument("--id", dest="volume_id", help="Override KRITI_RUNPOD_NETWORK_VOLUME_ID")
     return parser
 
 
-def _run_preflight(args: argparse.Namespace) -> int:
-    load_env_file(REPO_ROOT / ".env")
-    config = load_compute_config()
-    commit = _local_commit(args.commit, args.allow_dirty_local)
+def _api(config) -> RunPodApiClient:
+    return RunPodApiClient(
+        RunPodApiConfig(
+            api_base_url=config.runpod_api_base_url,
+            request_timeout_seconds=config.runpod_request_timeout_seconds,
+        )
+    )
 
-    provider = RunPodProvider(
+
+def _provider(config, disposable: bool):
+    if disposable:
+        return RunPodDisposableProvider(
+            RunPodDisposableConfig(
+                network_volume_id=config.runpod_network_volume_id,
+                template_id=config.runpod_disposable_template_id,
+                image_name=config.runpod_disposable_image_name,
+                gpu_type_ids=config.runpod_disposable_gpu_type_ids,
+                gpu_count=config.runpod_disposable_gpu_count,
+                name_prefix=config.runpod_disposable_name_prefix,
+                worker_hostname=config.worker_hostname,
+                container_disk_gb=config.runpod_disposable_container_disk_gb,
+                poll_interval_seconds=config.runpod_poll_interval_seconds,
+            ),
+            api=_api(config),
+        )
+    return RunPodProvider(
         RunPodProviderConfig(
             pod_id=config.runpod_pod_id,
             api_base_url=config.runpod_api_base_url,
@@ -90,6 +112,16 @@ def _run_preflight(args: argparse.Namespace) -> int:
             capacity_retry_interval_seconds=config.runpod_capacity_retry_interval_seconds,
         )
     )
+
+
+def _run_preflight(args: argparse.Namespace) -> int:
+    load_env_file(REPO_ROOT / ".env")
+    config = load_compute_config()
+    if args.existing_worker and args.disposable_worker:
+        raise RuntimeError("--existing-worker and --disposable-worker cannot be used together")
+    commit = _local_commit(args.commit, args.allow_dirty_local)
+
+    provider = _provider(config, args.disposable_worker)
     transport = TailscaleTransport(
         TailscaleTransportConfig(
             hostname=config.worker_hostname,
@@ -99,7 +131,6 @@ def _run_preflight(args: argparse.Namespace) -> int:
         )
     )
     orchestrator = PreflightOrchestrator(provider, transport)
-
     request = PreflightRequest(
         commit_sha=commit,
         repo_path=config.worker_repo_path,
@@ -113,7 +144,12 @@ def _run_preflight(args: argparse.Namespace) -> int:
 
     print(f"Kriti preflight commit: {commit}")
     print(f"Worker target: {config.tailscale_ssh_user}@{config.worker_hostname}")
-    if not args.existing_worker and config.runpod_capacity_retry_timeout_seconds > 0:
+    if args.disposable_worker:
+        print(
+            "RunPod mode: disposable worker; persistent workspace volume="
+            f"{config.runpod_network_volume_id or '<unset>'}"
+        )
+    elif not args.existing_worker and config.runpod_capacity_retry_timeout_seconds > 0:
         print(
             "RunPod capacity retry: "
             f"up to {config.runpod_capacity_retry_timeout_seconds:g}s "
@@ -128,18 +164,54 @@ def _run_preflight(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_volume(args: argparse.Namespace) -> int:
+    load_env_file(REPO_ROOT / ".env")
+    config = load_compute_config()
+    client = RunPodNetworkVolumeClient(_api(config))
+    if args.volume_command == "create":
+        if not args.confirm_create:
+            raise RuntimeError(
+                "Refusing to create billable storage without --confirm-create. "
+                "Review name, size, and data center in .env first."
+            )
+        if not config.runpod_network_volume_data_center_id:
+            raise RuntimeError("KRITI_RUNPOD_NETWORK_VOLUME_DATA_CENTER_ID is required")
+        volume = client.create(
+            RunPodNetworkVolumeConfig(
+                name=config.runpod_network_volume_name,
+                size_gb=config.runpod_network_volume_size_gb,
+                data_center_id=config.runpod_network_volume_data_center_id,
+            )
+        )
+        print(f"RUNPOD NETWORK VOLUME CREATED id={volume['id']} name={volume.get('name', '')}")
+        print("Set KRITI_RUNPOD_NETWORK_VOLUME_ID to the returned id before disposable-worker use.")
+        return 0
+    volume_id = args.volume_id or config.runpod_network_volume_id
+    if not volume_id:
+        raise RuntimeError("Network volume id is required")
+    volume = client.get(volume_id)
+    print(
+        f"RUNPOD NETWORK VOLUME id={volume.get('id', volume_id)} "
+        f"name={volume.get('name', '')} size={volume.get('size', '')} "
+        f"dataCenterId={volume.get('dataCenterId', '')}"
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
         if args.command == "preflight":
             return _run_preflight(args)
+        if args.command == "volume":
+            return _run_volume(args)
         parser.error(f"Unsupported command: {args.command}")
     except KeyboardInterrupt:
         print("Interrupted", file=sys.stderr)
         return 130
     except Exception as exc:
-        print(f"KRITI PREFLIGHT FAILED: {exc}", file=sys.stderr)
+        print(f"KRITI COMPUTE FAILED: {exc}", file=sys.stderr)
         return 1
     return 2
 
