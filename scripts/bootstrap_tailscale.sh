@@ -2,23 +2,11 @@
 # =============================================================================
 # Kriti LMS — Tailscale bootstrap for RunPod containers
 #
-# RunPod pods may not expose systemd or /dev/net/tun. This script therefore
-# starts tailscaled manually in userspace-networking mode and keeps its state on
-# persistent storage (default: /workspace/tailscale).
-#
-# Safe/idempotent behavior:
-#   - can install Tailscale automatically when missing
-#   - reuses an already-running tailscaled daemon
-#   - treats a NeedsLogin daemon as reachable instead of timing out
-#   - reuses an already-authenticated node when state is present
-#   - requires TAILSCALE_AUTH_KEY only for first-time/re-enrollment
-#   - enables Tailscale SSH for the private Windows -> RunPod control path
-#   - never prints the auth key
-#
-# Typical RunPod usage:
-#   export TAILSCALE_AUTH_KEY='tskey-auth-...'
-#   export KRITI_WORKER_HOSTNAME='kriti-runpod'
-#   bash scripts/bootstrap_tailscale.sh
+# Fixed workers can set KRITI_WORKER_HOSTNAME and retain persistent Tailscale
+# state under /workspace/tailscale. Disposable workers intentionally do not set
+# KRITI_WORKER_HOSTNAME: when RUNPOD_POD_ID is present, this script derives a
+# unique hostname (kriti-worker-<pod-id>) and keeps Tailscale state on ephemeral
+# container storage so deleting the Pod also deletes its Tailscale identity.
 # =============================================================================
 
 set -euo pipefail
@@ -26,13 +14,42 @@ set -euo pipefail
 TAILSCALE_BIN="${TAILSCALE_BIN:-tailscale}"
 TAILSCALED_BIN="${TAILSCALED_BIN:-tailscaled}"
 CURL_BIN="${CURL_BIN:-curl}"
-STATE_DIR="${KRITI_TAILSCALE_STATE_DIR:-/workspace/tailscale}"
+EXPLICIT_HOSTNAME="${KRITI_WORKER_HOSTNAME:-}"
+RUNPOD_ID="${RUNPOD_POD_ID:-}"
+HOSTNAME_PREFIX="${KRITI_WORKER_HOSTNAME_PREFIX:-kriti-worker}"
+
+sanitize_hostname() {
+    local value="$1"
+    value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/-+/-/g; s/^-+//; s/-+$//')"
+    [[ -n "$value" ]] || value="kriti-worker"
+    if [[ ! "$value" =~ ^[a-z] ]]; then
+        value="k-${value}"
+    fi
+    printf '%.63s' "$value" | sed -E 's/-+$//'
+}
+
+DISPOSABLE_IDENTITY=0
+if [[ -n "$EXPLICIT_HOSTNAME" ]]; then
+    HOSTNAME="$(sanitize_hostname "$EXPLICIT_HOSTNAME")"
+elif [[ -n "$RUNPOD_ID" ]]; then
+    HOSTNAME="$(sanitize_hostname "${HOSTNAME_PREFIX}-${RUNPOD_ID}")"
+    DISPOSABLE_IDENTITY=1
+else
+    HOSTNAME="kriti-runpod"
+fi
+
+if (( DISPOSABLE_IDENTITY )); then
+    DEFAULT_STATE_DIR="/tmp/kriti-tailscale-${RUNPOD_ID}"
+else
+    DEFAULT_STATE_DIR="/workspace/tailscale"
+fi
+
+STATE_DIR="${KRITI_TAILSCALE_STATE_DIR:-$DEFAULT_STATE_DIR}"
 STATE_FILE="${KRITI_TAILSCALE_STATE_FILE:-${STATE_DIR}/tailscaled.state}"
 RUNTIME_DIR="${KRITI_TAILSCALE_RUNTIME_DIR:-/var/run/tailscale}"
 SOCKET="${KRITI_TAILSCALE_SOCKET:-${RUNTIME_DIR}/tailscaled.sock}"
 PID_FILE="${KRITI_TAILSCALE_PID_FILE:-${RUNTIME_DIR}/kriti-tailscaled.pid}"
 LOG_FILE="${KRITI_TAILSCALE_LOG:-/tmp/kriti-tailscaled.log}"
-HOSTNAME="${KRITI_WORKER_HOSTNAME:-kriti-runpod}"
 AUTH_KEY="${TAILSCALE_AUTH_KEY:-}"
 LEGACY_STATE_FILE="${KRITI_TAILSCALE_LEGACY_STATE_FILE:-/var/lib/tailscale/tailscaled.state}"
 START_TIMEOUT_SECONDS="${KRITI_TAILSCALE_START_TIMEOUT_SECONDS:-20}"
@@ -68,10 +85,9 @@ install_tailscale_if_needed() {
 install_tailscale_if_needed
 mkdir -p "$STATE_DIR" "$RUNTIME_DIR"
 
-# Preserve the manually-enrolled node identity when migrating from the historic
-# default location used during initial RunPod testing. Copy only when the new
-# persistent state does not yet exist.
-if [[ ! -f "$STATE_FILE" && -f "$LEGACY_STATE_FILE" ]]; then
+# Legacy-state migration is for the fixed worker only. Disposable workers must
+# never inherit a persistent Tailscale machine identity from the shared volume.
+if (( ! DISPOSABLE_IDENTITY )) && [[ ! -f "$STATE_FILE" && -f "$LEGACY_STATE_FILE" ]]; then
     cp "$LEGACY_STATE_FILE" "$STATE_FILE"
     chmod 600 "$STATE_FILE" 2>/dev/null || true
     log "Migrated existing Tailscale state to persistent storage: ${STATE_FILE}"
@@ -80,14 +96,7 @@ fi
 TS=("$TAILSCALE_BIN" "--socket=${SOCKET}")
 
 daemon_reachable() {
-    # The control socket is created before authentication. It is therefore a
-    # better readiness signal than `tailscale status`, which can exit non-zero
-    # while the daemon is healthy but in NeedsLogin state.
     [[ -S "$SOCKET" || -e "$SOCKET" ]] || return 1
-
-    # If this bootstrap launched the daemon, also ensure that process still
-    # exists. For a daemon started outside this script there may be no PID file;
-    # in that case the socket itself is the compatibility signal.
     if [[ -f "$PID_FILE" ]]; then
         local pid
         pid="$(cat "$PID_FILE" 2>/dev/null || true)"
@@ -124,16 +133,12 @@ else
     done
 fi
 
-# `tailscale ip -4` succeeds only when the node is authenticated and has a
-# tailnet address. A daemon in NeedsLogin state is therefore handled here rather
-# than being mistaken for an unreachable daemon.
 if TAILNET_IP="$("${TS[@]}" ip -4 2>/dev/null | head -n 1)" && [[ -n "$TAILNET_IP" ]]; then
     log "Node is already authenticated (${HOSTNAME}, ${TAILNET_IP})"
 else
     [[ -n "$AUTH_KEY" ]] || fail "Node is not authenticated and TAILSCALE_AUTH_KEY is not set"
 
     log "Authenticating node as ${HOSTNAME}"
-    # Never echo this command: it contains the auth key.
     "${TS[@]}" up \
         --auth-key="$AUTH_KEY" \
         --hostname="$HOSTNAME" \
@@ -144,15 +149,15 @@ else
     [[ -n "$TAILNET_IP" ]] || fail "Tailscale authentication completed but no IPv4 address was assigned"
 fi
 
+# Enforce the expected name even when an existing fixed-worker state was reused.
+"${TS[@]}" set --hostname="$HOSTNAME" >/dev/null
+
 if is_enabled "$ENABLE_SSH"; then
     log "Enabling Tailscale SSH"
     "${TS[@]}" set --ssh >/dev/null
 fi
 
-# Final proof that the authenticated node still has an address after applying
-# preferences. This remains a tailnet/control-plane health check; the Windows
-# transport layer separately validates command execution.
 TAILNET_IP="$("${TS[@]}" ip -4 2>/dev/null | head -n 1 || true)"
 [[ -n "$TAILNET_IP" ]] || fail "Tailscale node lost its IPv4 address during bootstrap"
 
-log "READY hostname=${HOSTNAME} ip=${TAILNET_IP} ssh=${ENABLE_SSH} socket=${SOCKET} state=${STATE_FILE}"
+log "READY hostname=${HOSTNAME} ip=${TAILNET_IP} ssh=${ENABLE_SSH} socket=${SOCKET} state=${STATE_FILE} disposable=${DISPOSABLE_IDENTITY}"
