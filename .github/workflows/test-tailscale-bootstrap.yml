@@ -1,0 +1,37 @@
+name: Test Tailscale bootstrap
+
+on:
+  pull_request:
+    paths:
+      - "scripts/bootstrap_tailscale.sh"
+      - "test_tailscale_bootstrap.py"
+      - ".github/workflows/test-tailscale-bootstrap.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check shell syntax
+        run: bash -n scripts/bootstrap_tailscale.sh
+
+      - name: Run isolated bootstrap tests
+        shell: bash
+        run: |
+          set +e
+          python test_tailscale_bootstrap.py 2>&1 | tee tailscale-test.log
+          test_status=${PIPESTATUS[0]}
+          echo "$test_status" > tailscale-test.status
+          exit "$test_status"
+
+      - name: Upload test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tailscale-bootstrap-test-output
+          path: |
+            tailscale-test.log
+            tailscale-test.status
