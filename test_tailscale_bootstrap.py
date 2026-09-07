@@ -75,8 +75,8 @@ esac
 FAKE_CURL = r'''#!/usr/bin/env bash
 set -euo pipefail
 cat <<'INSTALLER'
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 cp "$FAKE_INSTALL_SOURCE_TAILSCALE" "$FAKE_INSTALL_TARGET_TAILSCALE"
 cp "$FAKE_INSTALL_SOURCE_TAILSCALED" "$FAKE_INSTALL_TARGET_TAILSCALED"
 chmod +x "$FAKE_INSTALL_TARGET_TAILSCALE" "$FAKE_INSTALL_TARGET_TAILSCALED"
