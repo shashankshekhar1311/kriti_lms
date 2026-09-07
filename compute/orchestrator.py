@@ -12,6 +12,7 @@ import shlex
 import time
 from typing import Callable
 
+from .models import WorkerInfo
 from .provider import ComputeProvider
 from .transport.base import WorkerTransport
 
@@ -26,6 +27,9 @@ class WorkerTransportTimeout(OrchestrationError):
 
 class DirtyWorkerError(OrchestrationError):
     """Raised when tracked worker changes would be overwritten by Git sync."""
+
+
+TransportFactory = Callable[[WorkerInfo], WorkerTransport]
 
 
 @dataclass(frozen=True)
@@ -47,30 +51,46 @@ class PreflightResult:
     worker_id: str
     commit_sha: str
     preflight_output: str
+    worker_hostname: str | None = None
 
 
 class PreflightOrchestrator:
-    """Start, synchronize, preflight, and safely stop a Kriti worker."""
+    """Start, synchronize, preflight, and safely stop a Kriti worker.
+
+    A static transport is used for fixed/existing workers. Disposable workers can
+    instead supply ``transport_factory`` so the provider's runtime WorkerInfo
+    (including its unique hostname) determines the Tailscale SSH destination.
+    """
 
     def __init__(
         self,
         provider: ComputeProvider,
-        transport: WorkerTransport,
+        transport: WorkerTransport | None = None,
         *,
+        transport_factory: TransportFactory | None = None,
         sleep_fn: Callable[[float], None] = time.sleep,
         monotonic_fn: Callable[[], float] = time.monotonic,
     ) -> None:
+        if transport is None and transport_factory is None:
+            raise ValueError("transport or transport_factory is required")
         self.provider = provider
         self.transport = transport
+        self.transport_factory = transport_factory
         self._sleep = sleep_fn
         self._monotonic = monotonic_fn
+
+    def _require_transport(self) -> WorkerTransport:
+        if self.transport is None:
+            raise OrchestrationError("Worker transport has not been resolved")
+        return self.transport
 
     def _wait_for_transport(self, timeout: int, poll_interval: float) -> None:
         if timeout <= 0:
             raise ValueError("transport_ready_timeout_seconds must be > 0")
+        transport = self._require_transport()
         deadline = self._monotonic() + timeout
         while True:
-            if self.transport.health_check():
+            if transport.health_check():
                 return
             if self._monotonic() >= deadline:
                 raise WorkerTransportTimeout(
@@ -83,12 +103,13 @@ class PreflightOrchestrator:
         return shlex.quote(value)
 
     def _sync_exact_commit(self, request: PreflightRequest) -> None:
+        transport = self._require_transport()
         repo = self._q(request.repo_path)
         remote = self._q(request.git_remote_url)
         sha = self._q(request.commit_sha)
 
         # Ignore untracked render artifacts, but never overwrite tracked changes.
-        dirty = self.transport.execute(
+        dirty = transport.execute(
             f"cd {repo} && "
             "if ! git diff --quiet || ! git diff --cached --quiet; then "
             "printf DIRTY; fi"
@@ -99,17 +120,18 @@ class PreflightOrchestrator:
             )
 
         # Public HTTPS remote avoids depending on ephemeral GitHub SSH keys.
-        self.transport.execute(f"cd {repo} && git remote set-url origin {remote}")
-        self.transport.execute(f"cd {repo} && git fetch --prune origin")
-        self.transport.execute(f"cd {repo} && git cat-file -e {sha}^{{commit}}")
-        self.transport.execute(f"cd {repo} && git checkout --detach {sha}")
-        actual = self.transport.execute(f"cd {repo} && git rev-parse HEAD").strip()
+        transport.execute(f"cd {repo} && git remote set-url origin {remote}")
+        transport.execute(f"cd {repo} && git fetch --prune origin")
+        transport.execute(f"cd {repo} && git cat-file -e {sha}^{{commit}}")
+        transport.execute(f"cd {repo} && git checkout --detach {sha}")
+        actual = transport.execute(f"cd {repo} && git rev-parse HEAD").strip()
         if actual.lower() != request.commit_sha.lower():
             raise OrchestrationError(
                 f"Worker checkout mismatch: expected {request.commit_sha}, got {actual or '<empty>'}"
             )
 
     def _run_preflight(self, request: PreflightRequest) -> str:
+        transport = self._require_transport()
         repo = self._q(request.repo_path)
         command = (
             f"cd {repo} && "
@@ -117,13 +139,14 @@ class PreflightOrchestrator:
             "source scripts/activate_runpod.sh && "
             "bash scripts/runpod_preflight.sh"
         )
-        return self.transport.execute(f"bash -lc {self._q(command)}")
+        return transport.execute(f"bash -lc {self._q(command)}")
 
     def run(self, request: PreflightRequest) -> PreflightResult:
         if not request.commit_sha.strip():
             raise ValueError("commit_sha is required")
 
         worker_id = "existing-worker"
+        worker_hostname: str | None = None
         worker_started = False
         failure: BaseException | None = None
 
@@ -132,7 +155,12 @@ class PreflightOrchestrator:
                 worker = self.provider.start()
                 worker_started = True
                 worker_id = worker.worker_id
-                self.provider.wait_until_ready(request.provider_ready_timeout_seconds)
+                ready_worker = self.provider.wait_until_ready(
+                    request.provider_ready_timeout_seconds
+                )
+                worker_hostname = ready_worker.hostname or worker.hostname
+                if self.transport_factory is not None:
+                    self.transport = self.transport_factory(ready_worker)
 
             self._wait_for_transport(
                 request.transport_ready_timeout_seconds,
@@ -144,6 +172,7 @@ class PreflightOrchestrator:
                 worker_id=worker_id,
                 commit_sha=request.commit_sha,
                 preflight_output=output,
+                worker_hostname=worker_hostname,
             )
         except BaseException as exc:
             failure = exc
