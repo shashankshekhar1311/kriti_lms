@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
-from ..exceptions import ComputeConfigurationError, ComputeError, WorkerReadinessTimeout, WorkerStartError, WorkerStopError
+from ..exceptions import (
+    ComputeConfigurationError,
+    WorkerReadinessTimeout,
+    WorkerStartError,
+    WorkerStopError,
+)
 from ..models import WorkerInfo, WorkerState, WorkerStatus
 from ..provider import ComputeProvider
 from .runpod_api import RunPodApiClient
@@ -24,7 +30,7 @@ class RunPodDisposableConfig:
     gpu_type_ids: tuple[str, ...] = ()
     gpu_count: int = 1
     name_prefix: str = "kriti-worker"
-    worker_hostname: str = "kriti-runpod"
+    worker_hostname_prefix: str = "kriti-worker"
     container_disk_gb: int = 50
     volume_mount_path: str = "/workspace"
     poll_interval_seconds: float = 5.0
@@ -35,9 +41,10 @@ class RunPodDisposableConfig:
 class RunPodDisposableProvider(ComputeProvider):
     """Create an available GPU Pod and delete it when work finishes.
 
-    Persistent state lives on a RunPod network volume. ``stop()`` therefore
-    deletes the disposable Pod rather than merely stopping it, eliminating the
-    fixed-host restart dependency seen with host-bound Pod storage.
+    Persistent data lives on a RunPod network volume. Tailscale identity is
+    intentionally *not* persistent: every disposable Pod derives a unique
+    hostname from the RunPod Pod ID, for example ``kriti-worker-abc123``.
+    ``stop()`` deletes the Pod while preserving the attached network volume.
     """
 
     provider_name = "runpod-disposable"
@@ -61,17 +68,25 @@ class RunPodDisposableProvider(ComputeProvider):
 
     def _validate_config(self) -> None:
         if not (self.config.network_volume_id or "").strip():
-            raise ComputeConfigurationError("KRITI_RUNPOD_NETWORK_VOLUME_ID is required for disposable workers")
+            raise ComputeConfigurationError(
+                "KRITI_RUNPOD_NETWORK_VOLUME_ID is required for disposable workers"
+            )
         if not self.config.gpu_type_ids:
-            raise ComputeConfigurationError("At least one RunPod GPU type id is required for disposable workers")
+            raise ComputeConfigurationError(
+                "At least one RunPod GPU type id is required for disposable workers"
+            )
         if self.config.gpu_count <= 0:
             raise ComputeConfigurationError("gpu_count must be > 0")
         if self.config.container_disk_gb <= 0:
             raise ComputeConfigurationError("container_disk_gb must be > 0")
         if not (self.config.template_id or self.config.image_name):
-            raise ComputeConfigurationError("Configure a RunPod template id or image name for disposable workers")
+            raise ComputeConfigurationError(
+                "Configure a RunPod template id or image name for disposable workers"
+            )
         if not self.config.volume_mount_path.strip():
             raise ComputeConfigurationError("volume_mount_path is required")
+        if not self.config.worker_hostname_prefix.strip():
+            raise ComputeConfigurationError("worker_hostname_prefix is required")
 
     @staticmethod
     def _desired_status(payload: Mapping[str, Any]) -> str:
@@ -86,18 +101,48 @@ class RunPodDisposableProvider(ComputeProvider):
             return WorkerState.STOPPED
         return WorkerState.UNKNOWN
 
+    @staticmethod
+    def _dns_label(value: str) -> str:
+        """Return a Tailscale/MagicDNS-safe machine label (<=63 chars)."""
+        label = re.sub(r"[^a-z0-9-]+", "-", value.strip().lower())
+        label = re.sub(r"-+", "-", label).strip("-")
+        if not label:
+            raise ComputeConfigurationError("Disposable worker hostname is empty after normalization")
+        label = label[:63].rstrip("-")
+        if not label or not label[0].isalpha():
+            label = f"k-{label}"[:63].rstrip("-")
+        return label
+
+    def hostname_for_pod(self, pod_id: str) -> str:
+        pod = self._dns_label(pod_id)
+        prefix = self._dns_label(self.config.worker_hostname_prefix)
+        max_prefix = max(1, 63 - len(pod) - 1)
+        prefix = prefix[:max_prefix].rstrip("-") or "k"
+        return self._dns_label(f"{prefix}-{pod}")
+
     def _info(self, payload: Mapping[str, Any]) -> WorkerInfo:
-        pod_id = str(payload.get("id") or self._pod_id or "")
+        pod_id = str(payload.get("id") or self._pod_id or "").strip()
+        hostname = self.hostname_for_pod(pod_id) if pod_id else None
         return WorkerInfo(
             worker_id=pod_id,
             provider=self.provider_name,
             state=self._state(payload),
-            hostname=self.config.worker_hostname or None,
+            hostname=hostname,
             public_ip=str(payload.get("publicIp")) if payload.get("publicIp") else None,
             metadata={
-                key: payload.get(key)
-                for key in ("desiredStatus", "name", "machineId", "lastStartedAt", "networkVolumeId", "costPerHr")
-                if payload.get(key) is not None
+                **{
+                    key: payload.get(key)
+                    for key in (
+                        "desiredStatus",
+                        "name",
+                        "machineId",
+                        "lastStartedAt",
+                        "networkVolumeId",
+                        "costPerHr",
+                    )
+                    if payload.get(key) is not None
+                },
+                "workerHostname": hostname,
             },
         )
 
@@ -163,7 +208,10 @@ class RunPodDisposableProvider(ComputeProvider):
             provider=self.provider_name,
             state=self._state(payload),
             message=f"RunPod desiredStatus={desired}",
-            metadata={"networkVolumeId": self.config.network_volume_id},
+            metadata={
+                "networkVolumeId": self.config.network_volume_id,
+                "workerHostname": self.hostname_for_pod(self._pod_id),
+            },
         )
 
     def wait_until_ready(self, timeout: int = 600) -> WorkerInfo:
