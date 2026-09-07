@@ -47,7 +47,6 @@ class PreflightResult:
     worker_id: str
     commit_sha: str
     preflight_output: str
-    worker_stopped: bool
 
 
 class PreflightOrchestrator:
@@ -126,7 +125,6 @@ class PreflightOrchestrator:
 
         worker_id = "existing-worker"
         worker_started = False
-        worker_stopped = False
         failure: BaseException | None = None
 
         try:
@@ -146,7 +144,6 @@ class PreflightOrchestrator:
                 worker_id=worker_id,
                 commit_sha=request.commit_sha,
                 preflight_output=output,
-                worker_stopped=False,
             )
         except BaseException as exc:
             failure = exc
@@ -158,15 +155,9 @@ class PreflightOrchestrator:
             if should_stop:
                 try:
                     self.provider.stop()
-                    worker_stopped = True
                 except Exception:
                     # Never mask the primary workflow failure. On a successful
                     # workflow, propagate shutdown failure because cost safety is
                     # part of the contract.
                     if failure is None:
                         raise
-
-            # PreflightResult is returned before finally executes, so callers
-            # should treat provider.stop() success as authoritative rather than
-            # relying on worker_stopped in this first result model.
-            del worker_stopped
