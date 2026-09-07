@@ -7,9 +7,13 @@ on:
       - "compute/providers/runpod_disposable.py"
       - "compute/providers/runpod_storage.py"
       - "compute/providers/__init__.py"
+      - "compute/orchestrator.py"
       - "compute/cli.py"
       - "config/compute.py"
+      - "scripts/bootstrap_tailscale.sh"
       - "test_runpod_disposable.py"
+      - "test_compute_orchestrator.py"
+      - "test_disposable_tailscale_identity.py"
       - ".github/workflows/test-runpod-disposable.yml"
   workflow_dispatch:
 
@@ -20,8 +24,17 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Check Tailscale bootstrap syntax
+        run: bash -n scripts/bootstrap_tailscale.sh
+
       - name: Run disposable worker tests
         run: python test_runpod_disposable.py
+
+      - name: Run orchestrator tests
+        run: python test_compute_orchestrator.py
+
+      - name: Run disposable Tailscale identity test
+        run: python test_disposable_tailscale_identity.py
 
       - name: Check CLI help
         run: |
