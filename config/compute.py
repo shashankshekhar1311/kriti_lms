@@ -29,6 +29,7 @@ class ComputeConfig:
     runpod_disposable_gpu_type_ids: tuple[str, ...] = ()
     runpod_disposable_gpu_count: int = 1
     runpod_disposable_name_prefix: str = "kriti-worker"
+    runpod_disposable_hostname_prefix: str = "kriti-worker"
     runpod_disposable_container_disk_gb: int = 50
     worker_hostname: str = "kriti-runpod"
     worker_repo_path: str = "/workspace/kriti_lms"
@@ -103,6 +104,9 @@ def load_compute_config() -> ComputeConfig:
         runpod_disposable_gpu_count=_env_int("KRITI_RUNPOD_DISPOSABLE_GPU_COUNT", 1),
         runpod_disposable_name_prefix=(
             os.getenv("KRITI_RUNPOD_DISPOSABLE_NAME_PREFIX") or "kriti-worker"
+        ).strip(),
+        runpod_disposable_hostname_prefix=(
+            os.getenv("KRITI_RUNPOD_DISPOSABLE_HOSTNAME_PREFIX") or "kriti-worker"
         ).strip(),
         runpod_disposable_container_disk_gb=_env_int(
             "KRITI_RUNPOD_DISPOSABLE_CONTAINER_DISK_GB", 50
