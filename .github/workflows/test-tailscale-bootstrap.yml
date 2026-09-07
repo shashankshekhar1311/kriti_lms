@@ -1,0 +1,22 @@
+name: Test Tailscale bootstrap
+
+on:
+  pull_request:
+    paths:
+      - "scripts/bootstrap_tailscale.sh"
+      - "test_tailscale_bootstrap.py"
+      - ".github/workflows/test-tailscale-bootstrap.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check shell syntax
+        run: bash -n scripts/bootstrap_tailscale.sh
+
+      - name: Run isolated bootstrap tests
+        run: python test_tailscale_bootstrap.py
