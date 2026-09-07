@@ -1,0 +1,20 @@
+name: Test Tailscale transport
+
+on:
+  pull_request:
+    paths:
+      - "compute/transport/**"
+      - "compute/exceptions.py"
+      - "test_tailscale_transport.py"
+      - ".github/workflows/test-tailscale-transport.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run isolated transport tests
+        run: python test_tailscale_transport.py
