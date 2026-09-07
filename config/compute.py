@@ -19,6 +19,11 @@ class ComputeConfig:
     runpod_request_timeout_seconds: float = 30.0
     runpod_poll_interval_seconds: float = 5.0
     worker_hostname: str = "kriti-runpod"
+    worker_repo_path: str = "/workspace/kriti_lms"
+    git_remote_url: str = "https://github.com/shashankshekhar1311/kriti_lms.git"
+    provider_ready_timeout_seconds: float = 600.0
+    transport_ready_timeout_seconds: float = 180.0
+    transport_poll_interval_seconds: float = 5.0
     tailscale_ssh_user: str = "root"
     tailscale_command_timeout_seconds: float = 60.0
     tailscale_health_timeout_seconds: float = 15.0
@@ -52,6 +57,20 @@ def load_compute_config() -> ComputeConfig:
             "KRITI_RUNPOD_POLL_INTERVAL_SECONDS", 5.0
         ),
         worker_hostname=(os.getenv("KRITI_WORKER_HOSTNAME") or "kriti-runpod").strip(),
+        worker_repo_path=(os.getenv("KRITI_WORKER_REPO_PATH") or "/workspace/kriti_lms").strip(),
+        git_remote_url=(
+            os.getenv("KRITI_GIT_REMOTE_URL")
+            or "https://github.com/shashankshekhar1311/kriti_lms.git"
+        ).strip(),
+        provider_ready_timeout_seconds=_env_float(
+            "KRITI_PROVIDER_READY_TIMEOUT_SECONDS", 600.0
+        ),
+        transport_ready_timeout_seconds=_env_float(
+            "KRITI_TRANSPORT_READY_TIMEOUT_SECONDS", 180.0
+        ),
+        transport_poll_interval_seconds=_env_float(
+            "KRITI_TRANSPORT_POLL_INTERVAL_SECONDS", 5.0
+        ),
         tailscale_ssh_user=(os.getenv("KRITI_TAILSCALE_SSH_USER") or "root").strip(),
         tailscale_command_timeout_seconds=_env_float(
             "KRITI_TAILSCALE_COMMAND_TIMEOUT_SECONDS", 60.0
