@@ -19,4 +19,19 @@ jobs:
         run: bash -n scripts/bootstrap_tailscale.sh
 
       - name: Run isolated bootstrap tests
-        run: python test_tailscale_bootstrap.py
+        shell: bash
+        run: |
+          set +e
+          python test_tailscale_bootstrap.py 2>&1 | tee tailscale-test.log
+          test_status=${PIPESTATUS[0]}
+          echo "$test_status" > tailscale-test.status
+          exit "$test_status"
+
+      - name: Upload test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tailscale-bootstrap-test-output
+          path: |
+            tailscale-test.log
+            tailscale-test.status
