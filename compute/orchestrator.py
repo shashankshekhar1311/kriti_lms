@@ -84,7 +84,14 @@ class PreflightOrchestrator:
             raise OrchestrationError("Worker transport has not been resolved")
         return self.transport
 
-    def _wait_for_transport(self, timeout: int, poll_interval: float) -> None:
+    def _wait_for_transport(
+        self,
+        timeout: int,
+        poll_interval: float,
+        *,
+        worker_id: str | None = None,
+        worker_hostname: str | None = None,
+    ) -> None:
         if timeout <= 0:
             raise ValueError("transport_ready_timeout_seconds must be > 0")
         transport = self._require_transport()
@@ -93,8 +100,14 @@ class PreflightOrchestrator:
             if transport.health_check():
                 return
             if self._monotonic() >= deadline:
+                context: list[str] = []
+                if worker_id:
+                    context.append(f"worker_id={worker_id}")
+                if worker_hostname:
+                    context.append(f"hostname={worker_hostname}")
+                suffix = f" ({', '.join(context)})" if context else ""
                 raise WorkerTransportTimeout(
-                    f"Tailscale transport did not become ready within {timeout}s"
+                    f"Tailscale transport did not become ready within {timeout}s{suffix}"
                 )
             self._sleep(max(0.0, poll_interval))
 
@@ -165,6 +178,8 @@ class PreflightOrchestrator:
             self._wait_for_transport(
                 request.transport_ready_timeout_seconds,
                 request.transport_poll_interval_seconds,
+                worker_id=worker_id,
+                worker_hostname=worker_hostname,
             )
             self._sync_exact_commit(request)
             output = self._run_preflight(request)
