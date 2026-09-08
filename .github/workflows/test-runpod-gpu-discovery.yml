@@ -1,0 +1,31 @@
+name: Test RunPod GPU discovery
+
+on:
+  pull_request:
+    paths:
+      - "compute/cli.py"
+      - "compute/providers/runpod_gpu.py"
+      - "test_runpod_gpu_discovery.py"
+      - ".github/workflows/test-runpod-gpu-discovery.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "compute/cli.py"
+      - "compute/providers/runpod_gpu.py"
+      - "test_runpod_gpu_discovery.py"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run GPU discovery tests
+        run: python -m unittest -v test_runpod_gpu_discovery.py
+      - name: Verify CLI help
+        run: |
+          python -m compute.cli --help
+          python -m compute.cli gpu list --help
