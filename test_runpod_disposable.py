@@ -44,7 +44,7 @@ class DisposableProviderTests(unittest.TestCase):
             network_volume_id="vol-123",
             template_id="tpl-123",
             gpu_type_ids=("NVIDIA GeForce RTX 4090", "NVIDIA RTX A6000"),
-            worker_hostname="kriti-runpod",
+            worker_hostname_prefix="kriti-worker",
             poll_interval_seconds=2.0,
         )
         values.update(overrides)
@@ -70,6 +70,7 @@ class DisposableProviderTests(unittest.TestCase):
         info = provider.start()
         self.assertEqual(info.worker_id, "pod-new")
         self.assertEqual(info.state, WorkerState.RUNNING)
+        self.assertEqual(info.hostname, "kriti-worker-pod-new")
         method, path, body = fake.calls[0]
         self.assertEqual((method, path), ("POST", "pods"))
         self.assertEqual(body["networkVolumeId"], "vol-123")
@@ -77,6 +78,24 @@ class DisposableProviderTests(unittest.TestCase):
         self.assertEqual(body["cloudType"], "SECURE")
         self.assertEqual(body["volumeMountPath"], "/workspace")
         self.assertEqual(body["templateId"], "tpl-123")
+
+    def test_hostname_is_unique_per_pod_id(self):
+        provider = RunPodDisposableProvider(self.config(), request_fn=FakeRequest([]))
+        first = provider.hostname_for_pod("abc123")
+        second = provider.hostname_for_pod("xyz789")
+        self.assertEqual(first, "kriti-worker-abc123")
+        self.assertEqual(second, "kriti-worker-xyz789")
+        self.assertNotEqual(first, second)
+
+    def test_hostname_is_dns_safe_and_bounded(self):
+        provider = RunPodDisposableProvider(
+            self.config(worker_hostname_prefix="Kriti Worker !!! With A Very Long Prefix " * 3),
+            request_fn=FakeRequest([]),
+        )
+        hostname = provider.hostname_for_pod("POD_ABC_123")
+        self.assertLessEqual(len(hostname), 63)
+        self.assertRegex(hostname, r"^[a-z][a-z0-9-]*[a-z0-9]$")
+        self.assertTrue(hostname.endswith("pod-abc-123"))
 
     def test_stop_deletes_disposable_pod_not_network_volume(self):
         fake = FakeRequest([
@@ -89,7 +108,7 @@ class DisposableProviderTests(unittest.TestCase):
         self.assertEqual(fake.calls[-1][:2], ("DELETE", "pods/pod-new"))
         self.assertFalse(any("networkvolumes" in call[1] for call in fake.calls))
 
-    def test_wait_until_ready_polls(self):
+    def test_wait_until_ready_polls_and_preserves_runtime_hostname(self):
         fake = FakeRequest([
             {"id": "pod-new", "desiredStatus": "CREATED"},
             {"id": "pod-new", "desiredStatus": "CREATED"},
@@ -102,6 +121,7 @@ class DisposableProviderTests(unittest.TestCase):
         provider.start()
         info = provider.wait_until_ready(timeout=10)
         self.assertEqual(info.state, WorkerState.RUNNING)
+        self.assertEqual(info.hostname, "kriti-worker-pod-new")
         self.assertEqual(clock.sleeps, [2.0])
 
     def test_creation_failure_does_not_leave_fake_pod_id(self):

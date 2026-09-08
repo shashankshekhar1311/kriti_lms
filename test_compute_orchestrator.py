@@ -22,14 +22,15 @@ SHA = "a" * 40
 
 
 class FakeProvider(ComputeProvider):
-    def __init__(self) -> None:
+    def __init__(self, hostname: str | None = None) -> None:
         self.started = 0
         self.stopped = 0
         self.waited = 0
+        self.hostname = hostname
 
     def start(self) -> WorkerInfo:
         self.started += 1
-        return WorkerInfo("pod-123", "fake", WorkerState.RUNNING)
+        return WorkerInfo("pod-123", "fake", WorkerState.RUNNING, hostname=self.hostname)
 
     def stop(self) -> None:
         self.stopped += 1
@@ -39,14 +40,15 @@ class FakeProvider(ComputeProvider):
 
     def wait_until_ready(self, timeout: int = 600) -> WorkerInfo:
         self.waited += 1
-        return WorkerInfo("pod-123", "fake", WorkerState.RUNNING)
+        return WorkerInfo("pod-123", "fake", WorkerState.RUNNING, hostname=self.hostname)
 
 
 class FakeTransport(WorkerTransport):
-    def __init__(self, *, health_sequence=None, dirty=False, preflight_failure=False) -> None:
+    def __init__(self, *, health_sequence=None, dirty=False, preflight_failure=False, hostname=None) -> None:
         self.health_sequence = list(health_sequence or [True])
         self.dirty = dirty
         self.preflight_failure = preflight_failure
+        self.hostname = hostname
         self.commands: list[str] = []
 
     def health_check(self) -> bool:
@@ -103,6 +105,24 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("git checkout --detach", joined)
         self.assertIn(SHA, joined)
         self.assertIn("runpod_preflight.sh", joined)
+
+    def test_transport_factory_uses_runtime_worker_hostname(self) -> None:
+        provider = FakeProvider(hostname="kriti-worker-pod-123")
+        created: list[FakeTransport] = []
+
+        def factory(worker: WorkerInfo) -> FakeTransport:
+            transport = FakeTransport(hostname=worker.hostname)
+            created.append(transport)
+            return transport
+
+        orchestrator = PreflightOrchestrator(provider, transport_factory=factory)
+        result = orchestrator.run(self.request())
+
+        self.assertEqual(result.worker_hostname, "kriti-worker-pod-123")
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].hostname, "kriti-worker-pod-123")
+        self.assertTrue(created[0].commands)
+        self.assertEqual(provider.stopped, 1)
 
     def test_tracked_dirty_worker_refuses_checkout_and_stops(self) -> None:
         provider = FakeProvider()
@@ -162,6 +182,10 @@ class OrchestratorTests(unittest.TestCase):
             orchestrator.run(self.request())
 
         self.assertEqual(provider.stopped, 1)
+
+    def test_requires_static_transport_or_factory(self) -> None:
+        with self.assertRaisesRegex(ValueError, "transport or transport_factory"):
+            PreflightOrchestrator(FakeProvider())
 
 
 if __name__ == "__main__":

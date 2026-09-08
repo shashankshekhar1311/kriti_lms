@@ -12,7 +12,8 @@ The durable model is:
 Windows control plane
     -> provision fresh GPU Pod using availability priority
     -> attach persistent RunPod network volume at /workspace
-    -> bootstrap Tailscale
+    -> derive unique Tailscale hostname from RUNPOD_POD_ID
+    -> bootstrap Tailscale with ephemeral node state
     -> sync exact Git commit
     -> run preflight/render
     -> download/verify outputs
@@ -23,7 +24,6 @@ RunPod network volume
     -> /workspace/caches
     -> /workspace/models
     -> /workspace/data
-    -> /workspace/tailscale
 ```
 
 Deleting the Pod must not delete the network volume.
@@ -82,11 +82,13 @@ therefore an explicit copy operation. A safe sequence is:
    supported CPU/data-recovery path if appropriate.
 4. Copy required `/workspace` content using RunPod-supported `runpodctl`, rsync, or
    the network-volume S3-compatible API.
-5. Verify at least repository, caches/models needed by Kriti, source books, rendered
-   output awaiting download, and `/workspace/tailscale` state.
-6. Verify the destination Pod can run `bootstrap_tailscale.sh`, Git status, and
+5. Verify repository, caches/models needed by Kriti, source books, and rendered
+   output awaiting download.
+6. Do **not** migrate `/workspace/tailscale/tailscaled.state` for disposable workers.
+   Each disposable worker must authenticate as its own short-lived Tailscale node.
+7. Verify the destination Pod can run `bootstrap_tailscale.sh`, Git status, and
    `runpod_preflight.sh`.
-7. Only after verification may the old host-bound Pod be retired.
+8. Only after verification may the old host-bound Pod be retired.
 
 Do not use `git reset --hard` or `git clean` as part of migration. Preserve the
 known untracked render/background assets unless intentionally archived elsewhere.
@@ -102,12 +104,35 @@ KRITI_RUNPOD_DISPOSABLE_TEMPLATE_ID=<template id>
 KRITI_RUNPOD_DISPOSABLE_GPU_TYPE_IDS=<gpu-type-id-1>,<gpu-type-id-2>
 KRITI_RUNPOD_DISPOSABLE_GPU_COUNT=1
 KRITI_RUNPOD_DISPOSABLE_NAME_PREFIX=kriti-worker
+KRITI_RUNPOD_DISPOSABLE_HOSTNAME_PREFIX=kriti-worker
 KRITI_RUNPOD_DISPOSABLE_CONTAINER_DISK_GB=50
 ```
+
+`KRITI_WORKER_HOSTNAME` remains the manual target only for the legacy fixed-Pod
+workflow. It is not used as the disposable worker's runtime destination.
 
 `KRITI_RUNPOD_DISPOSABLE_IMAGE_NAME` is available as a fallback when no template
 is used, but a template is preferred for Kriti because the worker also needs
 Tailscale/secret/startup configuration.
+
+### Disposable template identity rule
+
+When the disposable RunPod template is created, **do not copy these fixed-worker
+environment variables into it**:
+
+```text
+KRITI_WORKER_HOSTNAME
+KRITI_TAILSCALE_STATE_DIR=/workspace/tailscale
+KRITI_TAILSCALE_STATE_FILE=/workspace/tailscale/tailscaled.state
+```
+
+The bootstrap intentionally detects disposable mode only when an explicit
+`KRITI_WORKER_HOSTNAME` is absent and `RUNPOD_POD_ID` is present. It then derives
+the unique runtime hostname and selects ephemeral Tailscale state automatically.
+
+The template should still contain the RunPod Secret reference for
+`TAILSCALE_AUTH_KEY` plus the ordinary Tailscale/bootstrap settings that do not pin
+a machine identity.
 
 The provider sends RunPod:
 
@@ -119,12 +144,60 @@ networkVolumeId=<configured volume>
 volumeMountPath=/workspace
 ```
 
+## Dynamic Tailscale identity
+
+RunPod exposes `RUNPOD_POD_ID` inside every Pod. For disposable workers Kriti uses
+that provider-assigned ID as the stable rendezvous key for the lifetime of that
+Pod.
+
+Example:
+
+```text
+RunPod Pod ID:  abc123
+hostname prefix: kriti-worker
+Tailscale name:  kriti-worker-abc123
+```
+
+The same derivation is implemented on both sides:
+
+- `RunPodDisposableProvider` derives the expected hostname from the returned Pod ID;
+- `bootstrap_tailscale.sh` derives the same hostname from `RUNPOD_POD_ID` when no
+  explicit `KRITI_WORKER_HOSTNAME` is configured;
+- the orchestrator waits for RunPod readiness, receives `WorkerInfo.hostname`, then
+  creates the Tailscale transport for that exact runtime hostname.
+
+Disposable Tailscale state defaults to:
+
+```text
+/tmp/kriti-tailscale-<RUNPOD_POD_ID>/tailscaled.state
+```
+
+It intentionally does **not** live on the shared network volume. Persisting one
+`tailscaled.state` across disposable Pods would cause later Pods to reuse the old
+Tailscale machine identity and reintroduce hostname collisions.
+
+For the existing fixed worker, an explicit `KRITI_WORKER_HOSTNAME` keeps the prior
+persistent-state behavior under `/workspace/tailscale` unless overridden.
+
 ## Preflight with a disposable worker
 
 Once the network volume has been seeded and the template has been validated:
 
 ```powershell
 python -m compute.cli preflight --disposable-worker --allow-dirty-local
+```
+
+Expected control flow:
+
+```text
+create Pod
+  -> RunPod returns Pod ID
+  -> derive kriti-worker-<pod-id>
+  -> wait for provider RUNNING
+  -> Tailscale bootstrap registers same hostname
+  -> Windows creates transport for returned hostname
+  -> exact Git sync + preflight
+  -> delete Pod in finally
 ```
 
 The existing orchestrator owns cost safety. It calls provider `stop()` in `finally`.
@@ -134,20 +207,23 @@ The network volume remains intact.
 Do not use `--keep-worker-on-failure` in routine operation because it deliberately
 keeps the billable disposable GPU worker alive for debugging.
 
-## Tailscale identity
+## Tailscale auth-key guidance
 
-`/workspace/tailscale/tailscaled.state` should live on the network volume. This lets
-a replacement container reuse the existing Tailscale node identity instead of
-creating another hostname suffix on every worker.
+The RunPod template should continue to reference `TAILSCALE_AUTH_KEY` through a
+RunPod Secret rather than embedding the key. Disposable workers authenticate on
+each new Pod because their node state is ephemeral. A reusable tagged/pre-approved
+key can support this model; an ephemeral Tailscale auth key is also appropriate for
+short-lived container workloads when operationally convenient.
 
-Only one Kriti disposable worker should use the same Tailscale state at a time.
-The current orchestrator is deliberately one-worker-at-a-time.
+Using a Tailscale auth key configured for ephemeral nodes is preferred for the
+final disposable-worker template because stale device records are then cleaned up
+more naturally after a Pod is deleted.
 
 ## Scope boundary
 
-This slice implements network-volume creation/inspection and disposable Pod
-provisioning/deletion. It does not automatically copy the old host-bound workspace
-into a new network volume and does not create or modify RunPod templates.
+This slice automates runtime worker identity and transport discovery. It does not
+automatically copy the old host-bound workspace into the new network volume and it
+does not create or modify RunPod templates.
 
-Those are explicit operator-controlled migration steps because they affect durable
-data and billable infrastructure.
+Those remain explicit operator-controlled migration steps because they affect
+durable data and billable infrastructure.

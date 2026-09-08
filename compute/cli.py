@@ -9,6 +9,7 @@ import sys
 
 from config.compute import load_compute_config
 from config.env import load_env_file
+from .models import WorkerInfo
 from .orchestrator import PreflightOrchestrator, PreflightRequest
 from .providers.runpod import RunPodProvider, RunPodProviderConfig
 from .providers.runpod_api import RunPodApiClient, RunPodApiConfig
@@ -95,7 +96,7 @@ def _provider(config, disposable: bool):
                 gpu_type_ids=config.runpod_disposable_gpu_type_ids,
                 gpu_count=config.runpod_disposable_gpu_count,
                 name_prefix=config.runpod_disposable_name_prefix,
-                worker_hostname=config.worker_hostname,
+                worker_hostname_prefix=config.runpod_disposable_hostname_prefix,
                 container_disk_gb=config.runpod_disposable_container_disk_gb,
                 poll_interval_seconds=config.runpod_poll_interval_seconds,
             ),
@@ -114,6 +115,17 @@ def _provider(config, disposable: bool):
     )
 
 
+def _tailscale_transport(config, hostname: str) -> TailscaleTransport:
+    return TailscaleTransport(
+        TailscaleTransportConfig(
+            hostname=hostname,
+            user=config.tailscale_ssh_user,
+            command_timeout_seconds=config.tailscale_command_timeout_seconds,
+            health_timeout_seconds=config.tailscale_health_timeout_seconds,
+        )
+    )
+
+
 def _run_preflight(args: argparse.Namespace) -> int:
     load_env_file(REPO_ROOT / ".env")
     config = load_compute_config()
@@ -122,15 +134,22 @@ def _run_preflight(args: argparse.Namespace) -> int:
     commit = _local_commit(args.commit, args.allow_dirty_local)
 
     provider = _provider(config, args.disposable_worker)
-    transport = TailscaleTransport(
-        TailscaleTransportConfig(
-            hostname=config.worker_hostname,
-            user=config.tailscale_ssh_user,
-            command_timeout_seconds=config.tailscale_command_timeout_seconds,
-            health_timeout_seconds=config.tailscale_health_timeout_seconds,
+    if args.disposable_worker:
+        def transport_factory(worker: WorkerInfo) -> TailscaleTransport:
+            if not worker.hostname:
+                raise RuntimeError("Disposable provider returned no runtime worker hostname")
+            return _tailscale_transport(config, worker.hostname)
+
+        orchestrator = PreflightOrchestrator(
+            provider,
+            transport_factory=transport_factory,
         )
-    )
-    orchestrator = PreflightOrchestrator(provider, transport)
+    else:
+        orchestrator = PreflightOrchestrator(
+            provider,
+            _tailscale_transport(config, config.worker_hostname),
+        )
+
     request = PreflightRequest(
         commit_sha=commit,
         repo_path=config.worker_repo_path,
@@ -143,22 +162,26 @@ def _run_preflight(args: argparse.Namespace) -> int:
     )
 
     print(f"Kriti preflight commit: {commit}")
-    print(f"Worker target: {config.tailscale_ssh_user}@{config.worker_hostname}")
     if args.disposable_worker:
         print(
-            "RunPod mode: disposable worker; persistent workspace volume="
+            "RunPod mode: disposable worker; runtime Tailscale hostname will be derived from the Pod ID; "
+            f"prefix={config.runpod_disposable_hostname_prefix} volume="
             f"{config.runpod_network_volume_id or '<unset>'}"
         )
-    elif not args.existing_worker and config.runpod_capacity_retry_timeout_seconds > 0:
-        print(
-            "RunPod capacity retry: "
-            f"up to {config.runpod_capacity_retry_timeout_seconds:g}s "
-            f"every {config.runpod_capacity_retry_interval_seconds:g}s"
-        )
+    else:
+        print(f"Worker target: {config.tailscale_ssh_user}@{config.worker_hostname}")
+        if not args.existing_worker and config.runpod_capacity_retry_timeout_seconds > 0:
+            print(
+                "RunPod capacity retry: "
+                f"up to {config.runpod_capacity_retry_timeout_seconds:g}s "
+                f"every {config.runpod_capacity_retry_interval_seconds:g}s"
+            )
     if args.keep_worker_on_failure:
         print("WARNING: --keep-worker-on-failure can leave billable GPU compute running.")
 
     result = orchestrator.run(request)
+    if result.worker_hostname:
+        print(f"Resolved worker target: {config.tailscale_ssh_user}@{result.worker_hostname}")
     print(result.preflight_output, end="" if result.preflight_output.endswith("\n") else "\n")
     print(f"KRITI PREFLIGHT COMPLETE worker={result.worker_id} commit={result.commit_sha}")
     return 0
