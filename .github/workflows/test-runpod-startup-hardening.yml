@@ -1,0 +1,30 @@
+name: Test RunPod startup hardening
+
+on:
+  pull_request:
+    paths:
+      - "scripts/runpod_startup.sh"
+      - "compute/orchestrator.py"
+      - "test_runpod_startup_hardening.py"
+      - ".github/workflows/test-runpod-startup-hardening.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/runpod_startup.sh"
+      - "compute/orchestrator.py"
+      - "test_runpod_startup_hardening.py"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Bash syntax check
+        run: bash -n scripts/runpod_startup.sh
+      - name: Startup hardening tests
+        run: python -m unittest -v test_runpod_startup_hardening.py
+      - name: Orchestrator regression tests
+        run: python -m unittest -v test_compute_orchestrator.py
