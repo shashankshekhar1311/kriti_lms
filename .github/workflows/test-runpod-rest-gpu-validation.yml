@@ -1,0 +1,25 @@
+name: Test RunPod REST GPU validation
+
+on:
+  pull_request:
+    paths:
+      - 'compute/cli.py'
+      - 'compute/providers/runpod_rest_schema.py'
+      - 'test_runpod_rest_gpu_validation.py'
+      - '.github/workflows/test-runpod-rest-gpu-validation.yml'
+  push:
+    paths:
+      - 'compute/cli.py'
+      - 'compute/providers/runpod_rest_schema.py'
+      - 'test_runpod_rest_gpu_validation.py'
+      - '.github/workflows/test-runpod-rest-gpu-validation.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest -v test_runpod_rest_gpu_validation.py test_runpod_gpu_discovery.py
