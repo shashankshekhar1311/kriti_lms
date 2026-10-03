@@ -435,7 +435,7 @@ def generate_micro_lessons(pdf_path: Path, prompt: str, provider: str = "anthrop
     elif provider == "gemini":
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         res = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.6-flash",
             contents=[prompt, pdf_text[:15000]],
             config=types.GenerateContentConfig(response_mime_type="application/json")
         )
