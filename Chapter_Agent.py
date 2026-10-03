@@ -386,7 +386,7 @@ def upload_lesson_to_supabase(lesson_dir: Path, grade: str, subject: str, chapte
         return
 
     bucket_name = "lesson-assets"
-    remote_base = f"{str(grade).title()}/{str(subject).title()}/Chapter-{chapter_num}/lesson-{lesson_idx}"
+    remote_base = f"{str(grade).title()}/{str(subject).title()}/Chapter-{chapter_num}/Lesson-{lesson_idx}"
     print(f"\n   ☁️ Uploading Lesson {lesson_idx} media to Supabase Storage [{bucket_name}]...")
 
     files_to_sync = ["background.jpg", "narration.mp3", "talking_mascot.mp4", "props.json", "quiz.json"]
