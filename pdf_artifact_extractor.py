@@ -52,7 +52,8 @@ except ImportError:
 MIN_IMAGE_WIDTH = 120
 MIN_IMAGE_HEIGHT = 120
 MIN_IMAGE_BYTES = 8_000
-MAX_ARTIFACTS = 20
+# Dense chapters (markets, money) need room for logos/labels, not only large photos.
+MAX_ARTIFACTS = 32
 MAX_IMAGE_DIMENSION = 1600
 PAGE_RENDER_DPI = 144
 FIGURE_HINT = re.compile(r"\b(fig\.?|figure|map|diagram|chart|illustration|picture)\b", re.I)
@@ -280,8 +281,31 @@ def extract_images_from_pdf(pdf_path: Path) -> list[ExtractedImage]:
     rendered = _render_figure_pages_pymupdf(pdf_path, pages_with_images)
 
     combined = embedded + rendered
-    combined.sort(key=lambda item: (-item.width * item.height, item.page_num))
-    return combined[:MAX_ARTIFACTS]
+    # Prefer page diversity first so small logos (FSSAI/ISI/BEE) are not
+    # discarded when sorting only by pixel area.
+    by_page: dict[int, list[ExtractedImage]] = {}
+    for img in combined:
+        by_page.setdefault(img.page_num, []).append(img)
+    for page_imgs in by_page.values():
+        page_imgs.sort(key=lambda item: item.width * item.height, reverse=True)
+
+    selected: list[ExtractedImage] = []
+    pages_sorted = sorted(by_page.keys())
+    for page in pages_sorted:
+        if by_page[page] and len(selected) < MAX_ARTIFACTS:
+            selected.append(by_page[page].pop(0))
+
+    leftovers: list[ExtractedImage] = []
+    for page in pages_sorted:
+        leftovers.extend(by_page[page])
+    leftovers.sort(key=lambda item: item.width * item.height, reverse=True)
+    for img in leftovers:
+        if len(selected) >= MAX_ARTIFACTS:
+            break
+        selected.append(img)
+
+    selected.sort(key=lambda item: (item.page_num, -(item.width * item.height)))
+    return selected
 
 
 def _infer_artifact_type(caption: str) -> str:
@@ -378,7 +402,7 @@ def _caption_with_llm(
                 return {}
             client = genai.Client(api_key=api_key)
             res = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
                 contents=[prompt],
                 config=genai_types.GenerateContentConfig(
                     response_mime_type="application/json",

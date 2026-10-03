@@ -19,16 +19,17 @@ export const FloatingMathCard: React.FC<{
   const box = placeFloatingCard(event.type, event.mascot_position, event.card_position, {
     compact,
   });
-  const enter = interpolate(frame, [0, 12], [0, 1], {
+  const enter = interpolate(frame, [0, Math.min(12, Math.max(1, durationInFrames))], [0, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
-  const exit = interpolate(
-    frame,
-    [Math.max(12, durationInFrames - 10), durationInFrames],
-    [1, 0],
-    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
-  );
+  // Short beats (< ~0.5s) must not collapse exit to [N,N] — Remotion requires strictly increasing inputRange.
+  const exitEnd = Math.max(1, durationInFrames);
+  const exitStart = Math.min(Math.max(12, durationInFrames - 10), exitEnd - 1);
+  const exit = interpolate(frame, [exitStart, exitEnd], [1, 0], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
   const appear = enter * exit;
 
   return (

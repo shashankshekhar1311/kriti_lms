@@ -1,0 +1,162 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #111111;
+  --foreground: #ffffff;
+  --drona-emerald: #50c878;
+  --drona-cyan: #00ffff;
+  --drona-amber: #ffbf00;
+  --drona-rose: #e11d48;
+  /* Layout preference tokens (overridden by JS) */
+  --layout-bg: #111111;
+  --layout-surface: #0c0c0c;
+  --layout-surface-2: #1a1a1a;
+  --layout-border: rgba(255, 255, 255, 0.1);
+  --layout-text: #ffffff;
+  --layout-muted: rgba(255, 255, 255, 0.55);
+  --layout-accent: #00ffff;
+  --layout-accent-soft: rgba(0, 255, 255, 0.14);
+  --layout-accent-ink: #111111;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  color: var(--layout-text, var(--foreground));
+  background: var(--layout-bg, var(--background));
+  font-family: var(--font-body), "IBM Plex Sans", sans-serif;
+}
+
+/* Warm Academic — light canvas overrides for common dark hardcoded surfaces */
+html[data-layout="warm"] {
+  color-scheme: light;
+}
+
+html[data-layout="warm"] body {
+  color: var(--layout-text);
+  background: var(--layout-bg);
+}
+
+html[data-layout="warm"] .layout-shell,
+html[data-layout="warm"] .layout-shell header,
+html[data-layout="warm"] .layout-shell aside {
+  border-color: var(--layout-border) !important;
+}
+
+html[data-layout="warm"] * {
+  scrollbar-color: #cbbba8 transparent;
+}
+
+html[data-layout="warm"] *::-webkit-scrollbar-thumb {
+  background: #cbbba8;
+}
+
+html[data-layout="warm"] *::-webkit-scrollbar-thumb:hover {
+  background: #b5a28e;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display), "Space Grotesk", sans-serif;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a2a2a transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #2a2a2a;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #3a3a3a;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
+  body {
+    background: white !important;
+    color: black !important;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  .kriti-revision-print,
+  .kriti-revision-print * {
+    visibility: visible;
+  }
+
+  .kriti-revision-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    background: white !important;
+    color: #111 !important;
+  }
+
+  .print-page-break {
+    break-after: page;
+    page-break-after: always;
+  }
+}
+
+/* Warm Academic — lesson chrome (player tray + right rail) */
+html[data-layout="warm"] .layout-shell {
+  --layout-player-chrome: #f3ebe0;
+  --layout-player-chrome-2: #ebe0d2;
+}
+
+html[data-layout="warm"] .layout-shell aside,
+html[data-layout="warm"] .layout-shell [data-warm-chrome] {
+  color: var(--layout-text);
+}
+
+/* Soft Studio desk chrome */
+html[data-layout="soft"] .layout-shell {
+  --layout-player-chrome: var(--layout-surface);
+  --layout-player-chrome-2: var(--layout-surface-2);
+}
+
+/* Warm Academic — quiz/assessment contrast via layout tokens */
+html[data-layout="warm"] .layout-shell [data-quiz-overlay],
+html[data-layout="warm"] .layout-shell [data-quiz-panel] {
+  color: var(--layout-text);
+}
+
+html[data-layout="warm"] .layout-shell [data-quiz-panel] select,
+html[data-layout="warm"] .layout-shell [data-quiz-panel] option {
+  background-color: var(--layout-surface-2);
+  color: var(--layout-text);
+}
+
+html[data-layout="warm"] .layout-shell video,
+html[data-layout="warm"] .layout-shell .bg-black {
+  background-color: #000 !important;
+}

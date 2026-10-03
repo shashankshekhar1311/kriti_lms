@@ -16,16 +16,17 @@ export const ArtifactPanel: React.FC<{
   const frame = useCurrentFrame();
   const src = resolveImageSrc(event.artifact_image_url ?? '');
 
-  const enter = interpolate(frame, [0, 14], [0, 1], {
+  const enter = interpolate(frame, [0, Math.min(14, Math.max(1, durationInFrames))], [0, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
-  const exit = interpolate(
-    frame,
-    [Math.max(14, durationInFrames - 10), durationInFrames],
-    [1, 0],
-    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
-  );
+  // Short beats must not collapse exit to [N,N] — Remotion requires strictly increasing inputRange.
+  const exitEnd = Math.max(1, durationInFrames);
+  const exitStart = Math.min(Math.max(14, durationInFrames - 10), exitEnd - 1);
+  const exit = interpolate(frame, [exitStart, exitEnd], [1, 0], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
   const appear = enter * exit;
 
   if (!src) {

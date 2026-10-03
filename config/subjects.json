@@ -8,7 +8,8 @@
     "history",
     "geography",
     "civics",
-    "science"
+    "science",
+    "english"
   ],
   "artifacts_disabled": [
     "mathematics",
@@ -28,6 +29,9 @@
     "mathematics": "mathematics",
     "math": "mathematics",
     "ganith": "mathematics",
+    "english": "english",
+    "english_poorvi": "english",
+    "poorvi": "english",
     "english_grammar": "english_grammar"
   }
 }

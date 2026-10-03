@@ -85,11 +85,15 @@ except ImportError:
 
 # Background Removal Import
 try:
-    from rembg import remove
     from PIL import Image
 except ImportError:
-    remove = None
     Image = None
+
+try:
+    from rembg import remove
+except (ImportError, SystemExit):
+    # rembg calls sys.exit when no onnxruntime backend is installed.
+    remove = None
 
 # Conditional Provider SDK Imports
 try:
@@ -131,9 +135,11 @@ from lip_sync_service import (  # noqa: E402
     resolve_pose_image,
 )
 from lesson_sync import (  # noqa: E402
+    align_panels_to_timeline,
     align_storyboard_panels,
     audit_panel_coverage,
     is_storyboard_complete,
+    merge_short_bubble_cues,
     split_timeline_cues,
 )
 from artifact_config import (  # noqa: E402
@@ -179,7 +185,7 @@ NARRATION_WORDS_MIN = 450
 NARRATION_WORDS_MAX = 600
 
 MIN_PANELS_PER_LESSON = 2
-MAX_PANELS_PER_LESSON = 6
+MAX_PANELS_PER_LESSON = 8
 
 PHASE_TO_EVENT_TYPE = {
     "intro": "intro",
@@ -404,7 +410,11 @@ def _clean_items(items):
         if isinstance(item, (int, float)) and not isinstance(item, bool):
             cleaned.append(int(item) if float(item).is_integer() else str(item))
         else:
-            cleaned.append(str(item))
+            s = str(item).strip()
+            # Only strip markdown bullet markers like "- ", "* ", "• ", or "1. ", "2) "
+            s = re.sub(r"^(?:[-*•–—]\s*|\d+[\.\)]\s+)", "", s).strip()
+            if s:
+                cleaned.append(s)
     return cleaned
 
 def _as_xy(raw, fallback):
@@ -482,17 +492,13 @@ def panels_to_visual_events_precise(
     total_panels = len(raw_panels)
 
     events = []
-    chunk_size = max(1, total_sentences // max(1, total_panels))
+    boundaries = align_panels_to_timeline(raw_panels, narration_timeline)
 
     for idx, panel in enumerate(raw_panels):
-        start_sentence_idx = min(idx * chunk_size, total_sentences - 1)
-        end_sentence_idx = (
-            min((idx + 1) * chunk_size - 1, total_sentences - 1)
-            if idx < total_panels - 1
-            else total_sentences - 1
-        )
+        start_sentence_idx = boundaries[idx]
+        end_sentence_idx = boundaries[idx + 1] - 1
 
-        start_time = float(narration_timeline[start_sentence_idx]["start_time"])
+        start_time = 0.0 if idx == 0 else float(narration_timeline[start_sentence_idx]["start_time"])
         end_time = float(narration_timeline[end_sentence_idx]["end_time"])
 
         defaults = _phase_defaults(idx, total_panels)
@@ -707,7 +713,7 @@ def generate_gap_fill_lesson(pdf_text, existing_lessons, missing_terms, provider
                     messages=[{
                         "role": "user",
                         "content": (
-                            f"PDF TEXT CONTENT:\n{pdf_text[:15000]}\n\n"
+                            f"PDF TEXT CONTENT:\n{pdf_text}\n\n"
                             f"PROMPT:\n{prompt}\n\n"
                             f"RETURN ONLY VALID UNWRAPPED JSON OBJECT."
                         ),
@@ -727,7 +733,7 @@ def generate_gap_fill_lesson(pdf_text, existing_lessons, missing_terms, provider
         client = genai.Client(api_key=gemini_key)
         res = client.models.generate_content(
             model="gemini-3.6-flash",
-            contents=[f"PDF TEXT CONTENT:\n{pdf_text[:15000]}\n\nPROMPT:\n{prompt}"],
+            contents=[f"PDF TEXT CONTENT:\n{pdf_text}\n\nPROMPT:\n{prompt}"],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 temperature=0.2,
@@ -774,7 +780,7 @@ def generate_micro_lessons(pdf_path, prompt, provider="anthropic", cache_file=No
                     messages=[
                         {
                             "role": "user",
-                            "content": f"PDF TEXT CONTENT:\n{pdf_text[:15000]}\n\nPROMPT:\n{prompt}\n\nRETURN ONLY VALID UNWRAPPED JSON ARRAY."
+                            "content": f"PDF TEXT CONTENT:\n{pdf_text}\n\nPROMPT:\n{prompt}\n\nRETURN ONLY VALID UNWRAPPED JSON ARRAY."
                         }
                     ]
                 )
@@ -813,34 +819,157 @@ def generate_micro_lessons(pdf_path, prompt, provider="anthropic", cache_file=No
 
     return lessons
 
-def expand_quiz_item_pool(lesson_title, pdf_text, initial_quiz, provider="anthropic"):
-    current_pool = _as_question_list(initial_quiz)
-    needed = 20 - len(current_pool)
-    if needed <= 0:
-        randomized = current_pool[:20]
-        random.shuffle(randomized)
-        return {"item_pool": randomized}
+def _is_math_subject(subject_name: str | None) -> bool:
+    token = (subject_name or "").lower()
+    return any(key in token for key in ("math", "ganith", "ganita", "arithmetic"))
 
-    print(f"   🎯 Expanding Quiz Pool: Generating {needed} extra questions (Target: 20 Items)...")
+
+def _sanitize_quiz_item_keys(item: dict) -> dict:
+    """Normalize LLM quiz keys so MCQ grading never falls back to option[0]."""
+    if not isinstance(item, dict):
+        return item
+    out = dict(item)
+    qtype = str(out.get("type") or "").strip().lower()
+    ca = out.get("correct_answers")
+    # MCQ models often emit correct_answers as a single string — map to correct_answer.
+    if qtype in {"multiple_choice", "mcq", ""} and isinstance(ca, str):
+        if not out.get("correct_answer") and not out.get("answer"):
+            out["correct_answer"] = ca
+        out.pop("correct_answers", None)
+    elif isinstance(ca, list) and len(ca) == 1 and isinstance(ca[0], str):
+        if qtype in {"multiple_choice", "mcq"} or (
+            qtype not in {"multiple_select", "multi_select"} and out.get("options")
+        ):
+            if not out.get("correct_answer") and not out.get("answer"):
+                out["correct_answer"] = ca[0]
+                out.pop("correct_answers", None)
+    return out
+
+
+def expand_quiz_item_pool(
+    lesson_title,
+    pdf_text,
+    initial_quiz,
+    provider="anthropic",
+    *,
+    subject_name=None,
+    narration_text="",
+    target_count=6,
+):
+    """Build a small, lesson-specific exit-gate pool (not a 20-item chapter dump).
+
+    Prefer storyboard initial_quiz. Only expand when short, and keep questions
+    tightly tied to THIS microlesson's title + narration (not generic chapter math).
+    """
+    current_pool = _as_question_list(initial_quiz)
+    # Drop accidental duplicates by question text
+    seen_q = set()
+    deduped = []
+    for item in current_pool:
+        q = str(item.get("question") or "").strip().lower()
+        if not q or q in seen_q:
+            continue
+        seen_q.add(q)
+        deduped.append(item)
+    current_pool = deduped
+
+    needed = max(0, target_count - len(current_pool))
+    if needed <= 0:
+        randomized = current_pool[: max(target_count, 5)]
+        random.shuffle(randomized)
+        return {
+            "gating_config": {
+                "questions_per_attempt": min(5, len(randomized)) or 5,
+                "pass_threshold": 1.0,
+            },
+            "item_pool": randomized,
+        }
+
+    math_mode = _is_math_subject(subject_name)
+    lesson_context = (narration_text or "").strip()[:3500] or (pdf_text or "")[:3500]
+
+    if math_mode:
+        expert = "Class 7 Mathematics Assessment Expert"
+        type_rules = (
+            'Prefer "numerical" (exact gradeable value) and short "conceptual" items. '
+            "Do NOT invent unrelated history questions."
+        )
+        type_enum = '"numerical" or "conceptual"'
+    else:
+        expert = "Class 7 Social Studies / Science High-Order Assessment Expert"
+        type_rules = (
+            'Design rigorous self-learning questions that prevent guessing. Include a rich mix of: '
+            '1. "multiple_select": Multiple choice with multiple options correct ("Select all that apply", 2-3 correct answers out of 4-5 options). '
+            '   Must include "options": ["A","B","C","D"] and "correct_answers": ["exact matching option 1", "exact matching option 2"]. '
+            '2. "match_following": Match Column A with Column B. '
+            '   Must include "pairs": [{"left": "Term/Instrument/Concept", "right": "Matching Definition/Measurement/Unit"}, ... 4 pairs]. '
+            '3. "multiple_choice": Rigorous scenario-based or conceptual question testing causal reasoning, with 4 plausible options and 1 "correct_answer". '
+            'Questions MUST test deep understanding and application of concepts taught in THIS microlesson. '
+            'Do NOT generate trivial or easy recall questions — Drona is a self-learning tool requiring intellectual rigor.'
+        )
+        type_enum = '"multiple_select", "match_following", or "multiple_choice"'
+
+    print(
+        f"   🎯 Expanding Quiz Pool: +{needed} lesson-specific items "
+        f"(target {target_count}; subject={subject_name or 'unknown'})..."
+    )
 
     prompt = f"""
-    You are a Class 7 Mathematics Assessment Expert for Kriti School.
-    Generate EXACTLY {needed} diverse practice quiz questions for Class 7 students on topic: "{lesson_title}".
+    You are a {expert} for Kriti School.
+    Generate EXACTLY {needed} high-quality, challenging exit-gate quiz questions for ONE microlesson only.
 
-    PDF CONTEXT REFERENCE:
-    {pdf_text[:6000]}
+    MICROLESSON TITLE: "{lesson_title}"
+    SUBJECT FOLDER: "{subject_name or 'unknown'}"
+
+    MICROLESSON NARRATION / CONTEXT (primary source of truth):
+    {lesson_context}
 
     REQUIREMENTS:
-    - Questions must cover numerical calculations, place value concepts, comparison word problems, and short-answer items.
-    - Difficulty levels: Mix of 'easy', 'medium', and 'hard'.
-    - Output format MUST be a valid JSON array of objects.
-    - Each object must include:
-      "id": integer starting at {len(current_pool) + 1},
-      "type": "numerical" or "conceptual",
-      "question": "Question text here",
-      "correct_answer": "Answer here",
-      "explanation": "Brief explanation",
-      "difficulty": "easy" / "medium" / "hard"
+    - Every question must test a fact, term, mechanism, instrument, or idea taught in THIS microlesson.
+    - {type_rules}
+    - Difficulty: "medium" or "hard" (DO NOT generate easy questions).
+    - Provide progressive hints ("hint_1", "hint_2") and a step-by-step "solution_step".
+    - Output MUST be a valid JSON array of objects.
+    - Format specification by type:
+      For "multiple_select":
+        "id": integer starting at {len(current_pool) + 1},
+        "type": "multiple_select",
+        "question": "Which of the following statements are TRUE regarding ...? (Select all that apply)",
+        "options": ["Option 1", "Option 2", "Option 3", "Option 4"],
+        "correct_answers": ["Option 1", "Option 3"],
+        "hint_1": "First progressive clue",
+        "hint_2": "Deeper conceptual clue",
+        "solution_step": "Detailed explanation showing why the correct options are true and why distractors are false",
+        "explanation": "Summary takeaway sentence",
+        "difficulty": "hard"
+
+      For "match_following":
+        "id": integer starting at {len(current_pool) + 1},
+        "type": "match_following",
+        "question": "Match each weather term/instrument with its corresponding principle or measurement:",
+        "pairs": [
+          {{"left": "Item 1", "right": "Matching definition 1"}},
+          {{"left": "Item 2", "right": "Matching definition 2"}},
+          {{"left": "Item 3", "right": "Matching definition 3"}},
+          {{"left": "Item 4", "right": "Matching definition 4"}}
+        ],
+        "hint_1": "Clue for the first pair",
+        "hint_2": "Clue for the remaining pairs",
+        "solution_step": "Complete mapping explanation for all 4 pairs",
+        "explanation": "Summary takeaway sentence",
+        "difficulty": "medium"
+
+      For "multiple_choice":
+        "id": integer starting at {len(current_pool) + 1},
+        "type": "multiple_choice",
+        "question": "Scenario or high-order analytical question text",
+        "options": ["A", "B", "C", "D"],
+        "correct_answer": "Exact matching string from options",
+        "hint_1": "Guiding thought",
+        "hint_2": "Elimination hint",
+        "solution_step": "Detailed logical deduction",
+        "explanation": "Summary takeaway sentence",
+        "difficulty": "medium"
 
     RETURN ONLY THE VALID UNWRAPPED JSON ARRAY.
     """
@@ -852,7 +981,7 @@ def expand_quiz_item_pool(lesson_title, pdf_text, initial_quiz, provider="anthro
             res = client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=4096,
-                messages=[{"role": "user", "content": prompt}]
+                messages=[{"role": "user", "content": prompt}],
             )
             extra_questions = clean_and_parse_json(res.content[0].text)
         elif provider == "gemini":
@@ -860,20 +989,38 @@ def expand_quiz_item_pool(lesson_title, pdf_text, initial_quiz, provider="anthro
             res = client.models.generate_content(
                 model="gemini-3.6-flash",
                 contents=[prompt],
-                config=types.GenerateContentConfig(response_mime_type="application/json")
+                config=types.GenerateContentConfig(response_mime_type="application/json"),
             )
             extra_questions = clean_and_parse_json(res.text)
     except Exception as e:
         print(f"   ⚠️ Quiz expansion warning: {e}. Falling back to initial pool.")
 
     if isinstance(extra_questions, list):
-        current_pool.extend(extra_questions)
+        for item in extra_questions:
+            if not isinstance(item, dict):
+                continue
+            q = str(item.get("question") or "").strip().lower()
+            if not q or q in seen_q:
+                continue
+            seen_q.add(q)
+            current_pool.append(_sanitize_quiz_item_keys(item))
     elif isinstance(extra_questions, dict) and "item_pool" in extra_questions:
-        current_pool.extend(extra_questions["item_pool"])
+        for item in _as_question_list(extra_questions):
+            q = str(item.get("question") or "").strip().lower()
+            if not q or q in seen_q:
+                continue
+            seen_q.add(q)
+            current_pool.append(_sanitize_quiz_item_keys(item))
 
-    randomized = current_pool[:20]
+    randomized = [_sanitize_quiz_item_keys(x) if isinstance(x, dict) else x for x in current_pool[: max(target_count, 5)]]
     random.shuffle(randomized)
-    return {"item_pool": randomized}
+    return {
+        "gating_config": {
+            "questions_per_attempt": min(5, len(randomized)) or 5,
+            "pass_threshold": 1.0,
+        },
+        "item_pool": randomized,
+    }
 
 # ------------------------------------------------------------------------------
 # 5. TTS TIMESTAMPS, GPU LIP-SYNC & REMOTION RENDER
@@ -1015,10 +1162,15 @@ def synthesize_narration_timeline(narration_text, voice, lesson_dir, attempts=3)
     for candidate in _tts_voice_candidates(voice):
         for attempt in range(1, attempts + 1):
             if dest.exists():
-                dest.unlink()
+                try:
+                    dest.unlink(missing_ok=True)
+                except Exception:
+                    pass
             try:
                 if edge_tts is not None:
-                    cues = asyncio.run(_edge_tts_stream_narration(narration_text, dest, candidate))
+                    cues = asyncio.run(
+                        asyncio.wait_for(_edge_tts_stream_narration(narration_text, dest, candidate), timeout=180.0)
+                    )
                     timeline = _cues_to_timeline(cues)
                 else:
                     timeline = _cli_tts_with_srt(narration_text, dest, candidate)
@@ -1194,7 +1346,12 @@ def _aggregate_gpu_status(clip_paths, lesson_dir):
         )
     return summary
 
-def render_remotion(props, lesson_dir, output_path):
+def render_remotion(props, lesson_dir, output_path, force_regen=False):
+    output_path = Path(output_path).resolve()
+    if output_path.is_file() and output_path.stat().st_size > 100_000 and not force_regen:
+        print(f"   ♻️ Output video already rendered: {output_path.name} ({output_path.stat().st_size // 1024} KB)")
+        return output_path
+
     REMOTION_PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
     lesson_dir = Path(lesson_dir)
 
@@ -1255,6 +1412,7 @@ def render_remotion(props, lesson_dir, output_path):
     if not npx:
         raise RuntimeError("npx is required to render Remotion compositions.")
 
+    output_path = Path(output_path).resolve()
     cmd = [
         npx,
         "remotion",
@@ -1311,6 +1469,13 @@ def produce_comic_lesson(
         print(
             f"   💬 Split long narration lines for speech bubble: "
             f"{raw_cue_count} → {len(narration_timeline)} cues"
+        )
+    pre_merge_count = len(narration_timeline)
+    narration_timeline = merge_short_bubble_cues(narration_timeline)
+    if len(narration_timeline) != pre_merge_count:
+        print(
+            f"   💬 Merged short filler lines for speech bubble: "
+            f"{pre_merge_count} → {len(narration_timeline)} cues"
         )
     last_end = narration_timeline[-1]["end_time"] if narration_timeline else 0.0
     print(f"   ⏱️ Timeline ready: {len(narration_timeline)} sentences, {last_end:.2f}s ({used_voice})")
@@ -1436,7 +1601,7 @@ def produce_comic_lesson(
         artifacts_enabled=artifacts_enabled,
     )
     output_path = lesson_dir / "output.mp4"
-    render_remotion(props, lesson_dir, output_path)
+    render_remotion(props, lesson_dir, output_path, force_regen=force_regen)
     print(f"   ✨ Comic lesson ready ({output_path.name})")
     return output_path
 
@@ -1551,6 +1716,32 @@ def build_storyboard_prompt(class_name, student_name, artifact_catalog=""):
     - Write a warm, friendly, storytelling teacher script speaking directly to the student ({student}).
     - Avoid dry textbook statements. Use engaging questions.
 
+    EXIT-GATE QUIZ MANDATE (per microlesson):
+    - Every microlesson MUST include "initial_quiz": an array of EXACTLY 5 questions.
+    - Questions must be answerable only from THAT microlesson's narration (not other lessons).
+    - Prefer multiple-choice with exactly 4 options and an "answer" field matching one option.
+    - For maths microlessons, prefer gradeable numerical/short answers when appropriate.
+    - Do NOT pad social-science lessons with unrelated arithmetic word problems.
+    - Example MCQ shape:
+      {{"question":"...", "options":["A","B","C","D"], "answer":"B"}}
+
+    IMMERSIVE SOCIAL-SCIENCE MODULE MANDATE (History / Civics / Geography):
+    - Every microlesson MUST include an "interactive_module" object so students
+      actively explore the lesson after watching the video (not passive recall only).
+    - Choose module_type from the chapter theme:
+      * "decision_dilemma" — civic / governance / values choices
+      * "historical_investigator" — sources, artifacts, cause-and-effect in history
+      * "civic_action_lab" — local action, rights, public goods, community decisions
+      * For Geography-heavy beats, prefer "historical_investigator" or "civic_action_lab"
+        framed as mapping / place-based decisions.
+    - investigation_cards: EXACTLY 3 to 4 cards. Each icon MUST be one of:
+      scroll | shield | scale | landmark | feather
+    - dilemma_challenge.options: EXACTLY 3 choices. Exactly ONE option should have
+      "is_optimal": true. All options must include rich historical_outcome and
+      warm Socratic socratic_feedback (never blunt "wrong" / "right" only).
+    - Ground every clue and outcome in THIS microlesson's concepts and narration.
+    - Keep language age-appropriate for {class_name} and address the student warmly.
+
     Return a valid JSON array matching (panel count and lesson count are
     EXAMPLES only — use as many of each as the chapter actually requires):
     {{
@@ -1592,9 +1783,320 @@ def build_storyboard_prompt(class_name, student_name, artifact_catalog=""):
           "mascot_pose": "happy"
         }}
       ],
-      "initial_quiz": [...]
+      "initial_quiz": [
+        {{"question":"...", "options":["A","B","C","D"], "answer":"A"}},
+        {{"question":"...", "options":["A","B","C","D"], "answer":"B"}},
+        {{"question":"...", "options":["A","B","C","D"], "answer":"C"}},
+        {{"question":"...", "options":["A","B","C","D"], "answer":"D"}},
+        {{"question":"...", "options":["A","B","C","D"], "answer":"A"}}
+      ],
+      "interactive_module": {{
+        "module_type": "decision_dilemma",
+        "scenario_title": "string",
+        "scenario_context": "Vivid 2-3 sentence historical or civic dilemma",
+        "role": "Village Council Advisor",
+        "investigation_cards": [
+          {{
+            "id": "clue_1",
+            "label": "string",
+            "detail": "Evidence, artifact detail, or viewpoint",
+            "icon": "scroll"
+          }},
+          {{
+            "id": "clue_2",
+            "label": "string",
+            "detail": "Evidence, artifact detail, or viewpoint",
+            "icon": "shield"
+          }},
+          {{
+            "id": "clue_3",
+            "label": "string",
+            "detail": "Evidence, artifact detail, or viewpoint",
+            "icon": "landmark"
+          }}
+        ],
+        "dilemma_challenge": {{
+          "prompt": "Gyanu's critical thinking question",
+          "options": [
+            {{
+              "id": "opt_a",
+              "text": "Action or perspective choice",
+              "historical_outcome": "What would happen and why (chapter concepts)",
+              "socratic_feedback": "Warm Gyanu response praising logic and nuance",
+              "is_optimal": true
+            }},
+            {{
+              "id": "opt_b",
+              "text": "Alternate choice",
+              "historical_outcome": "Consequence grounded in the lesson",
+              "socratic_feedback": "Warm Gyanu nudge toward deeper thinking",
+              "is_optimal": false
+            }},
+            {{
+              "id": "opt_c",
+              "text": "Third choice",
+              "historical_outcome": "Consequence grounded in the lesson",
+              "socratic_feedback": "Warm Gyanu nudge toward deeper thinking",
+              "is_optimal": false
+            }}
+          ]
+        }}
+      }}
     }}
     """
+
+def _is_social_science_subject(subject_name: str | None) -> bool:
+    token = (subject_name or "").lower().replace(" ", "").replace("_", "").replace("-", "")
+    return any(
+        key in token
+        for key in (
+            "socialscience",
+            "socialstudies",
+            "history",
+            "civics",
+            "geography",
+            "politicalscience",
+            "economics",
+        )
+    )
+
+
+_INTERACTIVE_ICONS = ("scroll", "shield", "scale", "landmark", "feather")
+_INTERACTIVE_MODULE_TYPES = (
+    "decision_dilemma",
+    "historical_investigator",
+    "civic_action_lab",
+)
+
+
+def _pick_interactive_module_type(subject_name: str | None, lesson_title: str) -> str:
+    blob = f"{subject_name or ''} {lesson_title or ''}".lower()
+    if any(k in blob for k in ("civics", "constitution", "rights", "government", "panchayat", "democracy")):
+        return "civic_action_lab"
+    if any(k in blob for k in ("history", "empire", "king", "dynasty", "trade", "ancient", "medieval")):
+        return "historical_investigator"
+    if any(k in blob for k in ("geograph", "climate", "map", "river", "landform", "weather")):
+        return "historical_investigator"
+    if "economic" in blob or "market" in blob or "value" in blob:
+        return "decision_dilemma"
+    return "decision_dilemma"
+
+
+def build_fallback_interactive_module(
+    lesson_title: str,
+    narration_text: str = "",
+    panels=None,
+    subject_name: str | None = None,
+) -> dict:
+    """Always-valid immersive module when LLM output is missing or broken."""
+    title = (lesson_title or "This lesson").strip() or "This lesson"
+    module_type = _pick_interactive_module_type(subject_name, title)
+    role_map = {
+        "decision_dilemma": "Village Council Advisor",
+        "historical_investigator": "Junior Historical Investigator",
+        "civic_action_lab": "Civic Action Lab Apprentice",
+    }
+    role = role_map.get(module_type, "Curious Explorer")
+
+    panel_items = []
+    if isinstance(panels, list):
+        for panel in panels:
+            if not isinstance(panel, dict):
+                continue
+            items = panel.get("items")
+            if isinstance(items, list):
+                for item in items:
+                    text = str(item).strip()
+                    if text and text not in panel_items:
+                        panel_items.append(text)
+            if len(panel_items) >= 6:
+                break
+
+    narration_snip = " ".join((narration_text or "").split())[:280]
+    clue_seeds = panel_items[:4] or [
+        f"Key idea from {title}",
+        "A viewpoint from someone living through this moment",
+        "A place or practice mentioned in the lesson",
+        "A consequence that could reshape daily life",
+    ]
+    while len(clue_seeds) < 3:
+        clue_seeds.append(f"Another clue from {title}")
+
+    cards = []
+    for i, seed in enumerate(clue_seeds[:4]):
+        cards.append(
+            {
+                "id": f"clue_{i + 1}",
+                "label": seed[:72],
+                "detail": (
+                    f"{seed}. Use this evidence to reason about {title}. "
+                    + (narration_snip if i == 0 and narration_snip else "Look for cause, effect, and whose lives change.")
+                )[:420],
+                "icon": _INTERACTIVE_ICONS[i % len(_INTERACTIVE_ICONS)],
+            }
+        )
+
+    return {
+        "module_type": module_type,
+        "scenario_title": f"Explore: {title}",
+        "scenario_context": (
+            f"You step into the world of {title}. Clues from the lesson are scattered "
+            f"around you — inspect them carefully, then advise Gyanu on the wisest next move "
+            f"for the people living through this moment."
+        ),
+        "role": role,
+        "investigation_cards": cards,
+        "dilemma_challenge": {
+            "prompt": (
+                f"Based on what you discovered about {title}, which choice best protects "
+                f"people while staying true to the chapter's big idea?"
+            ),
+            "options": [
+                {
+                    "id": "opt_a",
+                    "text": "Choose the path that balances fairness with practical needs",
+                    "historical_outcome": (
+                        f"Communities that weighed trade-offs carefully around {title} "
+                        "often built more durable trust — even when progress felt slow."
+                    ),
+                    "socratic_feedback": (
+                        "Beautiful thinking! You noticed that the 'best' choice is rarely the loudest one. "
+                        "Gyanu is proud of how you held fairness and reality in the same hand."
+                    ),
+                    "is_optimal": True,
+                },
+                {
+                    "id": "opt_b",
+                    "text": "Rush a bold change without listening to local voices",
+                    "historical_outcome": (
+                        f"Rushing past local voices around {title} can create short-term wins "
+                        "but long-term resistance — a pattern history repeats often."
+                    ),
+                    "socratic_feedback": (
+                        "Courage is valuable — and so is listening. Gyanu asks: whose story "
+                        "might you have missed before choosing speed?"
+                    ),
+                    "is_optimal": False,
+                },
+                {
+                    "id": "opt_c",
+                    "text": "Do nothing and wait for someone else to decide",
+                    "historical_outcome": (
+                        f"Waiting forever around {title} often lets problems deepen, "
+                        "especially for people with the least power to wait."
+                    ),
+                    "socratic_feedback": (
+                        "Patience can be wise — but silence can also leave people unprotected. "
+                        "What small, careful action might still help?"
+                    ),
+                    "is_optimal": False,
+                },
+            ],
+        },
+    }
+
+
+def normalize_interactive_module(
+    raw,
+    *,
+    lesson_title: str = "",
+    narration_text: str = "",
+    panels=None,
+    subject_name: str | None = None,
+) -> dict:
+    """Repair LLM interactive_module payloads; always return a valid schema."""
+    fallback = build_fallback_interactive_module(
+        lesson_title=lesson_title,
+        narration_text=narration_text,
+        panels=panels,
+        subject_name=subject_name,
+    )
+    if not isinstance(raw, dict):
+        return fallback
+
+    module_type = str(raw.get("module_type") or "").strip()
+    if module_type not in _INTERACTIVE_MODULE_TYPES:
+        module_type = fallback["module_type"]
+
+    scenario_title = str(raw.get("scenario_title") or "").strip() or fallback["scenario_title"]
+    scenario_context = str(raw.get("scenario_context") or "").strip() or fallback["scenario_context"]
+    role = str(raw.get("role") or "").strip() or fallback["role"]
+
+    cards_raw = raw.get("investigation_cards")
+    cards = []
+    if isinstance(cards_raw, list):
+        for i, card in enumerate(cards_raw):
+            if not isinstance(card, dict):
+                continue
+            icon = str(card.get("icon") or "").strip().lower()
+            if icon not in _INTERACTIVE_ICONS:
+                icon = _INTERACTIVE_ICONS[i % len(_INTERACTIVE_ICONS)]
+            label = str(card.get("label") or "").strip()
+            detail = str(card.get("detail") or "").strip()
+            if not label or not detail:
+                continue
+            cards.append(
+                {
+                    "id": str(card.get("id") or f"clue_{len(cards) + 1}"),
+                    "label": label[:120],
+                    "detail": detail[:500],
+                    "icon": icon,
+                }
+            )
+    if len(cards) < 2:
+        cards = fallback["investigation_cards"]
+    elif len(cards) > 4:
+        cards = cards[:4]
+
+    challenge_raw = raw.get("dilemma_challenge") if isinstance(raw.get("dilemma_challenge"), dict) else {}
+    prompt = str(challenge_raw.get("prompt") or "").strip() or fallback["dilemma_challenge"]["prompt"]
+    options_raw = challenge_raw.get("options") if isinstance(challenge_raw.get("options"), list) else []
+    options = []
+    for i, opt in enumerate(options_raw):
+        if not isinstance(opt, dict):
+            continue
+        text = str(opt.get("text") or "").strip()
+        outcome = str(opt.get("historical_outcome") or "").strip()
+        feedback = str(opt.get("socratic_feedback") or "").strip()
+        if not text or not outcome or not feedback:
+            continue
+        options.append(
+            {
+                "id": str(opt.get("id") or f"opt_{chr(ord('a') + len(options))}"),
+                "text": text[:220],
+                "historical_outcome": outcome[:600],
+                "socratic_feedback": feedback[:600],
+                "is_optimal": bool(opt.get("is_optimal")),
+            }
+        )
+    if len(options) < 2:
+        options = fallback["dilemma_challenge"]["options"]
+    else:
+        if not any(o.get("is_optimal") for o in options):
+            options[0]["is_optimal"] = True
+        # Keep a single optimal flag
+        seen_optimal = False
+        for opt in options:
+            if opt.get("is_optimal"):
+                if seen_optimal:
+                    opt["is_optimal"] = False
+                else:
+                    seen_optimal = True
+        if len(options) > 4:
+            options = options[:4]
+
+    return {
+        "module_type": module_type,
+        "scenario_title": scenario_title[:160],
+        "scenario_context": scenario_context[:700],
+        "role": role[:120],
+        "investigation_cards": cards,
+        "dilemma_challenge": {
+            "prompt": prompt[:400],
+            "options": options,
+        },
+    }
+
 
 def _process_single_lesson(
     lesson,
@@ -1645,11 +2147,32 @@ def _process_single_lesson(
         pdf_text=pdf_text,
         initial_quiz=initial_quiz,
         provider=provider,
+        subject_name=subject_name,
+        narration_text=narration_text,
+        target_count=6,
     )
     quiz_file = lesson_dir / "quiz.json"
     with open(quiz_file, "w", encoding="utf-8") as f:
         json.dump(full_quiz, f, indent=2)
     print(f"   📝 Saved Quiz Bank: {quiz_file.name} ({len(full_quiz.get('item_pool', []))} randomized items ready!)")
+
+    interactive_raw = lesson.get("interactive_module")
+    interactive_module = normalize_interactive_module(
+        interactive_raw,
+        lesson_title=title,
+        narration_text=narration_text or "",
+        panels=panels,
+        subject_name=subject_name,
+    )
+    interactive_file = lesson_dir / "interactive_module.json"
+    with open(interactive_file, "w", encoding="utf-8") as f:
+        json.dump(interactive_module, f, indent=2)
+    repaired = interactive_raw is None or not isinstance(interactive_raw, dict)
+    print(
+        f"   🧭 Saved Immersion Lab: {interactive_file.name} "
+        f"[{interactive_module.get('module_type')}]"
+        + (" (fallback repaired)" if repaired else "")
+    )
 
     if not narration_text:
         print("   ❌ ERROR: No narration text found in AI storyboard.")

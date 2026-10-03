@@ -1,0 +1,122 @@
+{
+  "_comment": "Human-readable book and chapter titles for the Kriti portal. Keys match Source_Books / Rendered_Output folder names. Folder IDs (Chapter-12) stay technical; titles are display-only. Edit titles here — do not rename folders.",
+  "books": {
+    "Class-7/English-Poorvi": {
+      "display_name": "English · Poorvi",
+      "textbook": "Poorvi",
+      "chapters": {
+        "Chapter-1": "Learning Together",
+        "Chapter-2": "Wit and Humour",
+        "Chapter-3": "Dreams and Discoveries",
+        "Chapter-4": "Travel and Adventure",
+        "Chapter-5": "Bravehearts"
+      }
+    },
+    "Class-7/Hindi-Malhar": {
+      "display_name": "Hindi · मल्हार",
+      "textbook": "मल्हार",
+      "chapters": {
+        "Chapter-1": "माँ, कह एक कहानी",
+        "Chapter-2": "तीन बुद्धिमान",
+        "Chapter-3": "फूल और काँटा",
+        "Chapter-4": "पानी रे पानी",
+        "Chapter-5": "नहीं होना बीमार",
+        "Chapter-6": "गिरिधर कविराय की कुंडलियाँ",
+        "Chapter-7": "वर्षा-बहार",
+        "Chapter-8": "बिरजू महाराज से साक्षात्कार",
+        "Chapter-9": "चिड़िया",
+        "Chapter-10": "मीरा के पद"
+      }
+    },
+    "Class-7/Maths-Ganith-Prakash-I": {
+      "display_name": "Maths · Ganita Prakash (Part 1)",
+      "textbook": "Ganita Prakash Part 1",
+      "chapters": {
+        "Chapter-1": "Large Numbers Around Us",
+        "Chapter-2": "Arithmetic Expressions",
+        "Chapter-3": "A Peek Beyond the Point",
+        "Chapter-4": "Expressions using Letter-Numbers",
+        "Chapter-5": "Parallel and Intersecting Lines",
+        "Chapter-6": "Number Play",
+        "Chapter-7": "A Tale of Three Intersecting Lines",
+        "Chapter-8": "Working with Fractions"
+      }
+    },
+    "Class-7/Maths-Ganith-Prakash-II": {
+      "display_name": "Maths · Ganita Prakash (Part 2)",
+      "textbook": "Ganita Prakash Part 2",
+      "chapters": {
+        "Chapter-1": "Geometric Twins",
+        "Chapter-2": "Operations with Integers",
+        "Chapter-3": "Finding Common Ground",
+        "Chapter-4": "Another Peek Beyond the Point",
+        "Chapter-5": "Connecting the Dots",
+        "Chapter-6": "Constructions and Tilings",
+        "Chapter-7": "Finding the Unknown"
+      }
+    },
+    "Class-7/Science-Curiosity": {
+      "display_name": "Science · Curiosity",
+      "textbook": "Curiosity",
+      "chapters": {
+        "Chapter-1": "The Ever-Evolving World of Science",
+        "Chapter-2": "Exploring Substances: Acidic, Basic, and Neutral",
+        "Chapter-3": "Electricity: Circuits and their Components",
+        "Chapter-4": "The World of Metals and Non-metals",
+        "Chapter-5": "Changes Around Us: Physical and Chemical",
+        "Chapter-6": "Adolescence: A Stage of Growth and Change",
+        "Chapter-7": "Heat Transfer in Nature",
+        "Chapter-8": "Measurement of Time and Motion",
+        "Chapter-9": "Life Processes in Animals",
+        "Chapter-10": "Life Processes in Plants",
+        "Chapter-11": "Light: Shadows and Reflections",
+        "Chapter-12": "Earth, Moon, and the Sun"
+      }
+    },
+    "Class-7/SocialScience-Part1-Class-7": {
+      "display_name": "Social Science · Exploring Society (Part 1)",
+      "textbook": "Exploring Society: India and Beyond — Part 1",
+      "chapters": {
+        "Chapter-1": "Geographical Diversity of India",
+        "Chapter-2": "Understanding the Weather",
+        "Chapter-3": "Climates of India",
+        "Chapter-4": "New Beginnings: Cities and States",
+        "Chapter-5": "The Rise of Empires",
+        "Chapter-6": "The Age of Reorganisation",
+        "Chapter-7": "The Gupta Era: An Age of Tireless Creativity",
+        "Chapter-8": "How the Land Becomes Sacred",
+        "Chapter-9": "From the Rulers to the Ruled: Types of Governments",
+        "Chapter-10": "The Constitution of India — An Introduction",
+        "Chapter-11": "From Barter to Money",
+        "Chapter-12": "Understanding Markets"
+      }
+    },
+    "Class-7/SocialScience-Part2-Class-7": {
+      "display_name": "Social Science · Exploring Society (Part 2)",
+      "textbook": "Exploring Society: India and Beyond — Part 2",
+      "chapters": {
+        "Chapter-1": "The Story of Indian Farming",
+        "Chapter-2": "India and Her Neighbours",
+        "Chapter-3": "Empires and Kingdoms: 6th to 10th Centuries",
+        "Chapter-4": "Turning Tides: 11th and 12th Centuries",
+        "Chapter-5": "India, a Home to Many",
+        "Chapter-6": "The State, the Government, and You",
+        "Chapter-7": "Infrastructure: Engine of India's Development",
+        "Chapter-8": "Banks and the Magic of Finance"
+      }
+    },
+    "Class-7/KaushalBodh": {
+      "display_name": "Kaushal Bodh",
+      "textbook": "Kaushal Bodh",
+      "chapters": {
+        "Chapter-1": "Plant Nursery",
+        "Chapter-2": "School Habitat Garden",
+        "Chapter-3": "Tie and Dye",
+        "Chapter-4": "AI Assistant",
+        "Chapter-5": "Storytime with Puppets",
+        "Chapter-6": "Family Health Handbook",
+        "Chapter-7": "Planning for Kaushal Mela"
+      }
+    }
+  }
+}

@@ -13,7 +13,12 @@ export const IntroCard: React.FC<{
   const heading = useFadeSlide(2, 20);
 
   const perItemStride = durationInFrames
-    ? Math.max(6, Math.round((durationInFrames - 28) / Math.max(1, items.length)))
+    ? items.length <= 2
+      ? Math.min(
+          90,
+          Math.max(6, Math.round((durationInFrames - 28) / Math.max(1, items.length))),
+        )
+      : Math.max(6, Math.round((durationInFrames - 28) / Math.max(1, items.length)))
     : 6;
 
   return (

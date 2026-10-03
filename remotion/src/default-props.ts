@@ -6,7 +6,7 @@ import type {ComicLessonProps} from './schema';
  */
 export const defaultComicLessonProps: ComicLessonProps = {
   lesson_title: 'Light — Reflection (Artifact Preview)',
-  student_name: 'Rahul',
+  student_name: 'Saanvi',
   mascot_id: 'gyanu',
   lip_sync_mode: 'cartoon_svg',
   subject: 'science',
@@ -25,7 +25,7 @@ export const defaultComicLessonProps: ComicLessonProps = {
   ],
   narration_timeline: [
     {
-      text: 'Hey Rahul! I am Gyanu — watch my beak move with the narration beat.',
+      text: 'Hey Saanvi! I am Gyanu — watch my beak move with the narration beat.',
       start_time: 0,
       end_time: 5,
     },
