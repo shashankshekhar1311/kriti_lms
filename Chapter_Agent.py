@@ -114,13 +114,15 @@ SPATIAL_PHASES = (
 _SDXL_PIPE = None
 
 # Supabase Initialization
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
+# Clean accidental quotes, spaces, or trailing slashes from environment variables
+SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip().strip('"').strip("'").rstrip("/")
+SUPABASE_KEY = (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or "").strip().strip('"').strip("'")
+
 supabase: Client = None
 if create_client and SUPABASE_URL and SUPABASE_KEY:
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        print("☁️ Supabase client connected.")
+        print(f"☁️ Supabase client connected: {SUPABASE_URL}")
     except Exception as e:
         print(f"⚠️ Supabase init warning: {e}")
 
@@ -245,11 +247,31 @@ def get_media_duration(file_path: Path) -> float:
     res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
     return float(res.stdout.strip())
 
+def sanitize_text_for_tts(text: str) -> str:
+    """Strips Markdown syntax, XML/HTML tags, and irregular punctuation that cause Edge-TTS to abort."""
+    text = re.sub(r"\*+", "", text)             # Remove markdown bold/italics
+    text = re.sub(r"<[^>]+>", "", text)         # Strip HTML/XML tags
+    text = re.sub(r"\[.*?\]", "", text)         # Strip bracketed text
+    text = re.sub(r'["“”]', '', text)           # Clean smart quotes
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+def sanitize_text_for_tts(text: str) -> str:
+    """Strips Markdown syntax, XML/HTML tags, and irregular punctuation that cause Edge-TTS to abort."""
+    text = re.sub(r"\*+", "", text)             # Remove markdown bold/italics
+    text = re.sub(r"<[^>]+>", "", text)         # Strip HTML/XML tags
+    text = re.sub(r"\[.*?\]", "", text)         # Strip bracketed text
+    text = re.sub(r'["“”]', '', text)           # Clean smart quotes
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
 async def _edge_tts_stream_narration(text: str, dest: Path, voice: str):
+    clean_text = sanitize_text_for_tts(text)
     proxy = os.getenv("EDGE_TTS_PROXY") or None
-    communicate = edge_tts.Communicate(text, voice, proxy=proxy, boundary="SentenceBoundary")
+    communicate = edge_tts.Communicate(clean_text, voice, proxy=proxy, boundary="SentenceBoundary")
     cues = []
     dest.parent.mkdir(parents=True, exist_ok=True)
+    
     with dest.open("wb") as audio_file:
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
@@ -265,21 +287,34 @@ async def _edge_tts_stream_narration(text: str, dest: Path, voice: str):
                 })
     return cues
 
-def synthesize_narration_timeline(narration_text: str, voice: str, lesson_dir: Path):
+def synthesize_narration_timeline(narration_text: str, primary_voice: str, lesson_dir: Path):
     dest = lesson_dir / "narration.mp3"
-    if dest.exists():
-        dest.unlink()
-    cues = asyncio.run(_edge_tts_stream_narration(narration_text, dest, voice))
-    timeline = [{"text": c["text"], "start_time": c["start_time"], "end_time": c["end_time"]} for c in cues if c.get("text")]
-    if not timeline:
-        total = max(get_media_duration(dest), 0.4)
-        sentences = split_narration_sentences(narration_text)
-        cursor = 0.0
-        dur_step = total / len(sentences)
-        for s in sentences:
-            timeline.append({"text": s, "start_time": round(cursor, 3), "end_time": round(cursor + dur_step, 3)})
-            cursor += dur_step
-    return dest, timeline, voice
+    candidate_voices = [primary_voice, "en-US-BrianNeural", "en-US-JennyNeural", "en-IN-NeerjaNeural"]
+    
+    for voice in candidate_voices:
+        for attempt in range(1, 4):
+            try:
+                if dest.exists():
+                    dest.unlink()
+                cues = asyncio.run(_edge_tts_stream_narration(narration_text, dest, voice))
+                
+                # Check that audio file was created and is non-empty
+                if dest.exists() and dest.stat().st_size > 1000:
+                    timeline = [{"text": c["text"], "start_time": c["start_time"], "end_time": c["end_time"]} for c in cues if c.get("text")]
+                    if not timeline:
+                        total = max(get_media_duration(dest), 0.4)
+                        sentences = split_narration_sentences(narration_text)
+                        cursor = 0.0
+                        dur_step = total / len(sentences)
+                        for s in sentences:
+                            timeline.append({"text": s, "start_time": round(cursor, 3), "end_time": round(cursor + dur_step, 3)})
+                            cursor += dur_step
+                    return dest, timeline, voice
+            except Exception as err:
+                print(f"      ⚠️ TTS ({voice}) attempt {attempt} failed: {err}")
+                time.sleep(attempt * 2)  # Backoff delay before retry
+                
+    raise RuntimeError("Edge-TTS failed across all voices and retries. Check internet connectivity.")
 
 def extract_audio_segment(src_audio: Path, dest: Path, start_time: float, end_time: float) -> Path:
     duration = max(0.25, float(end_time) - float(start_time))
