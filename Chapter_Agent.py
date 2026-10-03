@@ -422,24 +422,53 @@ def build_storyboard_prompt(class_name: str) -> str:
     ]
     """
 
-def generate_micro_lessons(pdf_path: Path, prompt: str, provider: str = "anthropic"):
+def generate_micro_lessons(pdf_path: Path, prompt: str, provider: str = "gemini"):
     pdf_text = extract_pdf_text(pdf_path)
-    if provider == "anthropic":
-        client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        res = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=8192,
-            messages=[{"role": "user", "content": f"PDF TEXTBOOK EXCERPT:\n{pdf_text[:15000]}\n\n{prompt}"}]
-        )
-        return clean_and_parse_json(res.content[0].text)
-    elif provider == "gemini":
-        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-        res = client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=[prompt, pdf_text[:15000]],
-            config=types.GenerateContentConfig(response_mime_type="application/json")
-        )
-        return clean_and_parse_json(res.text)
+
+    # 1. Anthropic Path (with automatic failover)
+    if provider == "anthropic" and os.getenv("ANTHROPIC_API_KEY"):
+        try:
+            client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+            res = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=8192,
+                messages=[{"role": "user", "content": f"PDF TEXTBOOK EXCERPT:\n{pdf_text[:15000]}\n\n{prompt}"}]
+            )
+            return clean_and_parse_json(res.content[0].text)
+        except Exception as err:
+            print(f"   ⚠️ Anthropic failed: {err}. Falling back to Gemini...")
+
+    # 2. Gemini Multi-Model Cascade with Exponential Backoff
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY environment variable is not configured.")
+
+    client = genai.Client(api_key=api_key)
+    candidate_models = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-flash-latest"]
+
+    for model_name in candidate_models:
+        for attempt in range(1, 4):
+            try:
+                print(f"   🤖 Calling Gemini [{model_name}] (Attempt {attempt}/3)...")
+                res = client.models.generate_content(
+                    model=model_name,
+                    contents=[prompt, pdf_text[:15000]],
+                    config=types.GenerateContentConfig(response_mime_type="application/json")
+                )
+                if res.text:
+                    print(f"   ✅ Successfully generated syllabus using [{model_name}].")
+                    return clean_and_parse_json(res.text)
+            except Exception as e:
+                err_msg = str(e)
+                if "503" in err_msg or "UNAVAILABLE" in err_msg or "429" in err_msg:
+                    wait_time = attempt * 4
+                    print(f"   ⏳ {model_name} busy (503/429). Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"   ⚠️ {model_name} error: {err_msg[:90]}. Trying next model...")
+                    break
+
+    raise RuntimeError("All LLM providers and model fallbacks failed. Please check API quota or try again in a few minutes.")
 
 # ------------------------------------------------------------------------------
 # 6. PIPELINE ORCHESTRATION
