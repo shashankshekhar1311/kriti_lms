@@ -362,47 +362,52 @@ def upload_lesson_to_supabase(lesson_dir: Path, grade: str, subject: str, chapte
         if local_path.is_file():
             storage_path = f"{remote_base}/{file_name}"
             file_bytes = local_path.read_bytes()
-            
-            # Determine legitimate MIME type (no "auto" string)
             content_type = mimetypes.guess_type(str(local_path))[0] or "application/octet-stream"
             if file_name.endswith(".json"):
                 content_type = "application/json"
 
+            uploaded = False
             try:
                 supabase.storage.from_(bucket_name).upload(
                     path=storage_path,
                     file=file_bytes,
                     file_options={"upsert": "true", "content-type": content_type}
                 )
+                uploaded = True
             except Exception as upload_err:
-                # If file already exists and upload throws conflict, update it
                 try:
                     supabase.storage.from_(bucket_name).update(
                         path=storage_path,
                         file=file_bytes,
                         file_options={"upsert": "true", "content-type": content_type}
                     )
-                except Exception as inner_err:
-                    print(f"      ⚠️️ Failed uploading {file_name}: {inner_err}")
+                    uploaded = True
+                except Exception as update_err:
+                    print(f"      ❌ Failed uploading {file_name}: {update_err}")
 
-            url = supabase.storage.from_(bucket_name).get_public_url(storage_path)
-            public_urls[file_name] = url
-            print(f"      ✅ Uploaded: {file_name} ({content_type})")
+            if uploaded:
+                url = supabase.storage.from_(bucket_name).get_public_url(storage_path)
+                public_urls[file_name] = url
+                print(f"      ✅ Uploaded: {file_name} ({content_type})")
 
-    try:
-        supabase.table("micro_lessons").upsert({
-            "grade": grade,
-            "subject": subject,
-            "chapter_number": chapter_num,
-            "lesson_index": lesson_idx,
-            "title": lesson_title,
-            "props_url": public_urls.get("props.json", ""),
-            "quiz_data": quiz_data,
-            "duration_seconds": int(total_seconds)
-        }, on_conflict="grade,subject,chapter_number,lesson_index").execute()
-        print(f"   ✅ Upserted metadata to PostgreSQL table [micro_lessons]: Lesson {lesson_idx}")
-    except Exception as err:
-        print(f"   ⚠️ PostgreSQL sync notice: {err}")
+    # Only upsert if at least props.json or video uploaded
+    if "props.json" in public_urls or "talking_mascot.mp4" in public_urls:
+        try:
+            supabase.table("micro_lessons").upsert({
+                "grade": grade,
+                "subject": subject,
+                "chapter_number": chapter_num,
+                "lesson_index": lesson_idx,
+                "title": lesson_title,
+                "props_url": public_urls.get("props.json", ""),
+                "quiz_data": quiz_data,
+                "duration_seconds": int(total_seconds)
+            }, on_conflict="grade,subject,chapter_number,lesson_index").execute()
+            print(f"   ✅ Upserted metadata to PostgreSQL table [micro_lessons]: Lesson {lesson_idx}")
+        except Exception as err:
+            print(f"   ⚠️ PostgreSQL sync notice: {err}")
+    else:
+        print(f"   ⚠️ Skipping database upsert for Lesson {lesson_idx} due to upload failures.")
 
 # ------------------------------------------------------------------------------
 # 5. LLM STORYBOARD PROMPTING (SCALABLE 3-MINUTE CURRICULUM)
